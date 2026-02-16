@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --agentible-bg: #0f1419;
+  --agentible-bg-elevated: #111827;
+  --agentible-accent: #2563eb;
+  --agentible-accent-glow: #3b82f6;
+  --agentible-pill: #1d4ed8;
+  --agentible-border: rgba(255, 255, 255, 0.15);
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+  background-color: var(--agentible-bg);
+  color: #ffffff;
+}
+
+/* Smooth scroll for anchor links */
+html {
+  scroll-behavior: smooth;
+}
