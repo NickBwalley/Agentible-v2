@@ -40,7 +40,7 @@ export function Hero() {
           <Link href="#trial">Start Your 30-Day Free Trial</Link>
         </Button>
         <Button variant="secondary" size="lg" showArrow asChild>
-          <Link href="/#pricing">View Pricing</Link>
+          <Link href="/pricing">View Pricing</Link>
         </Button>
       </div>
 

@@ -4,7 +4,9 @@ import Link from "next/link";
 import Image from "next/image";
 import { useState } from "react";
 import { NavDropdown } from "./NavDropdown";
+import { UserMenu } from "./UserMenu";
 import { Button } from "@/components/ui/Button";
+import { useUser } from "@/lib/hooks/use-user";
 
 // Dropdown items aligned with AI SDR / RevOps platform (Agentible)
 const productsItems = [
@@ -37,6 +39,8 @@ const toolsItems = [
 
 export function Header() {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { user, profile, loading } = useUser();
+
   return (
     <header className="fixed top-0 left-0 right-0 z-50 w-full border-b border-white/10 bg-[#0f1419]/95 backdrop-blur-sm">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-6 px-6 lg:px-8">
@@ -62,7 +66,7 @@ export function Header() {
           <NavDropdown label="Products" items={productsItems} />
           <NavDropdown label="Solutions" items={solutionsItems} />
           <Link
-            href="/#pricing"
+            href="/pricing"
             className="text-sm font-medium text-white/80 hover:text-white transition-colors"
           >
             Pricing
@@ -77,17 +81,28 @@ export function Header() {
           <NavDropdown label="Tools" items={toolsItems} />
         </nav>
 
-        {/* Actions */}
+        {/* Actions: when logged in show UserMenu, else Book a Demo + Log In */}
         <div className="flex items-center gap-4 shrink-0">
-          <Link
-            href="/signin"
-            className="hidden sm:inline text-sm font-medium text-white/80 hover:text-white transition-colors border-b border-dashed border-white/40 hover:border-white"
-          >
-            Login
-          </Link>
-          <Button variant="primary" size="sm" className="hidden sm:inline-flex" asChild>
-            <Link href="/#trial">Start Your 30-Day Free Trial</Link>
-          </Button>
+          {loading ? (
+            <span className="h-9 w-9 rounded-full bg-white/10 animate-pulse" aria-hidden />
+          ) : user ? (
+            <UserMenu profile={profile} user={user} />
+          ) : (
+            <>
+              <Button variant="primary" size="sm" className="hidden sm:inline-flex" asChild>
+                <Link href="/book-a-demo">Book a Demo</Link>
+              </Button>
+              <Link
+                href="/signin"
+                className="hidden sm:inline text-sm font-medium text-white/80 hover:text-white transition-colors border-b border-dashed border-white/40 hover:border-white"
+              >
+                Log In
+              </Link>
+              <Button variant="primary" size="sm" className="hidden sm:inline-flex" asChild>
+                <Link href="/signup">Get Started</Link>
+              </Button>
+            </>
+          )}
           <button
             onClick={() => setMobileOpen(!mobileOpen)}
             className="lg:hidden p-2 text-white/80 hover:text-white"
@@ -112,7 +127,7 @@ export function Header() {
           {solutionsItems.map((i) => (
             <Link key={i.href} href={i.href} className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>{i.label}</Link>
           ))}
-          <Link href="/#pricing" className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>Pricing</Link>
+          <Link href="/pricing" className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>Pricing</Link>
           <Link href="/integrations" className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>Integrations</Link>
           {resourcesItems.map((i) => (
             <Link key={i.href} href={i.href} className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>{i.label}</Link>
@@ -121,10 +136,23 @@ export function Header() {
             <Link key={i.href} href={i.href} className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>{i.label}</Link>
           ))}
           <div className="pt-2 border-t border-white/10 flex flex-col gap-2">
-            <Link href="/signin" className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>Login</Link>
-            <Button variant="primary" size="sm" asChild>
-              <Link href="/#trial" onClick={() => setMobileOpen(false)}>Start 30-Day Free Trial</Link>
-            </Button>
+            {user ? (
+              <>
+                <Link href="/dashboard/profile" className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>Profile</Link>
+                <Link href="/dashboard/payment-history" className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>Payment History</Link>
+                <Link href="/auth/signout" className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>Log Out</Link>
+              </>
+            ) : (
+              <>
+                <Button variant="primary" size="sm" asChild>
+                  <Link href="/book-a-demo" onClick={() => setMobileOpen(false)}>Book a Demo</Link>
+                </Button>
+                <Link href="/signin" className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>Log In</Link>
+                <Button variant="primary" size="sm" asChild>
+                  <Link href="/signup" onClick={() => setMobileOpen(false)}>Get Started</Link>
+                </Button>
+              </>
+            )}
           </div>
         </div>
       )}

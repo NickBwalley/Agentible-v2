@@ -1,12 +1,12 @@
 import { Header } from "@/components/landing/Header";
-import { LoginCard } from "@/components/landing/LoginCard";
+import { SignupCard } from "@/components/landing/SignupCard";
 
-export default function SignInPage() {
+export default function SignupPage() {
   return (
     <main className="min-h-screen bg-[#0f1419]">
       <Header />
       <section className="pt-28 pb-20 px-6 flex flex-col items-center">
-        <LoginCard />
+        <SignupCard />
       </section>
     </main>
   );
