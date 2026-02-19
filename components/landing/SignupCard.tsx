@@ -6,59 +6,15 @@ import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
 
-// Common country codes for phone input
-const COUNTRY_CODES = [
-  { code: "+1", country: "US", label: "United States (+1)" },
-  { code: "+44", country: "GB", label: "United Kingdom (+44)" },
-  { code: "+61", country: "AU", label: "Australia (+61)" },
-  { code: "+91", country: "IN", label: "India (+91)" },
-  { code: "+49", country: "DE", label: "Germany (+49)" },
-  { code: "+33", country: "FR", label: "France (+33)" },
-  { code: "+81", country: "JP", label: "Japan (+81)" },
-  { code: "+86", country: "CN", label: "China (+86)" },
-  { code: "+55", country: "BR", label: "Brazil (+55)" },
-  { code: "+52", country: "MX", label: "Mexico (+52)" },
-  { code: "+31", country: "NL", label: "Netherlands (+31)" },
-  { code: "+34", country: "ES", label: "Spain (+34)" },
-  { code: "+39", country: "IT", label: "Italy (+39)" },
-  { code: "+82", country: "KR", label: "South Korea (+82)" },
-  { code: "+65", country: "SG", label: "Singapore (+65)" },
-  { code: "+27", country: "ZA", label: "South Africa (+27)" },
-  { code: "+971", country: "AE", label: "UAE (+971)" },
-  { code: "+353", country: "IE", label: "Ireland (+353)" },
-  { code: "+46", country: "SE", label: "Sweden (+46)" },
-  { code: "+47", country: "NO", label: "Norway (+47)" },
-];
-
 const inputClass =
   "w-full rounded-lg border border-white/20 bg-white/5 px-3 py-2.5 pl-9 text-sm text-white placeholder-white/40 focus:border-[#2563EB] focus:outline-none focus:ring-1 focus:ring-[#2563EB]";
 
 export function SignupCard() {
   const router = useRouter();
   const [showPassword, setShowPassword] = useState(false);
-  const [countryCode, setCountryCode] = useState("+1");
-  const [phoneValue, setPhoneValue] = useState("");
-  const [phoneError, setPhoneError] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-
-  const validatePhone = (value: string) => {
-    const digits = value.replace(/\D/g, "");
-    if (digits.length < 7) return "Phone number is too short";
-    if (digits.length > 15) return "Phone number is too long";
-    return "";
-  };
-
-  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = e.target.value;
-    setPhoneValue(v);
-    setPhoneError(validatePhone(v) || "");
-  };
-
-  const handlePhoneBlur = () => {
-    if (phoneValue && !phoneError) setPhoneError(validatePhone(phoneValue) || "");
-  };
 
   const supabase = createClient();
 
@@ -71,13 +27,11 @@ export function SignupCard() {
     const email = (formData.get("email") as string)?.trim();
     const password = formData.get("password") as string;
     const fullName = (formData.get("fullName") as string)?.trim();
-    const phone = phoneValue ? `${countryCode} ${phoneValue}`.trim() : undefined;
 
     if (!email || !password) {
       setError("Email and password are required.");
       return;
     }
-    if (phoneError) return;
 
     setLoading(true);
     try {
@@ -85,7 +39,7 @@ export function SignupCard() {
         email,
         password,
         options: {
-          data: { full_name: fullName || undefined, phone: phone || undefined },
+          data: { full_name: fullName || undefined },
         },
       });
       if (signUpError) {
@@ -197,43 +151,7 @@ export function SignupCard() {
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-white/90 mb-1.5">Phone Number *</label>
-            <div className="flex rounded-lg border border-white/20 bg-white/5 overflow-hidden focus-within:ring-1 focus-within:ring-[#2563EB] focus-within:border-[#2563EB]">
-              <select
-                value={countryCode}
-                onChange={(e) => setCountryCode(e.target.value)}
-                className="bg-white/5 text-white/90 text-sm py-2.5 pl-3 pr-6 border-r border-white/20 focus:outline-none focus:ring-0 cursor-pointer min-w-[7rem]"
-                aria-label="Country code"
-              >
-                {COUNTRY_CODES.map(({ code, label }) => (
-                  <option key={code} value={code} className="bg-[#0f1419] text-white">
-                    {label}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="tel"
-                name="phone"
-                autoComplete="tel-national"
-                placeholder="e.g. 555 123 4567"
-                value={phoneValue}
-                onChange={handlePhoneChange}
-                onBlur={handlePhoneBlur}
-                className="flex-1 min-w-0 bg-transparent px-4 py-2.5 text-sm text-white placeholder-white/40 focus:outline-none"
-                required
-                aria-invalid={!!phoneError}
-                aria-describedby={phoneError ? "phone-error" : undefined}
-              />
-            </div>
-            {phoneError && (
-              <p id="phone-error" className="mt-1 text-xs text-red-400">{phoneError}</p>
-            )}
-          </div>
-          {error && (
-            <p className="text-sm text-red-400" role="alert">{error}</p>
-          )}
-          <div>
-            <label className="block text-sm font-medium text-white/90 mb-1.5">Password *</label>
+            <label className="block text-sm font-medium text-white/90 mb-1.5">Create a Password *</label>
             <div className="relative">
               <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/50">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
@@ -269,6 +187,14 @@ export function SignupCard() {
             </div>
           </div>
 
+          {error && (
+            <p className="text-sm text-red-400" role="alert">{error}</p>
+          )}
+
+          <Button type="submit" variant="primary" size="md" className="w-full" disabled={loading}>
+            {loading ? "Signing up…" : "Signup"}
+          </Button>
+
           <div className="relative flex items-center justify-center py-1">
             <span className="absolute inset-0 flex items-center">
               <span className="w-full border-t border-white/20" />
@@ -293,15 +219,11 @@ export function SignupCard() {
           </Button>
 
           <p className="text-center text-xs text-white/60">
-            By clicking &quot;Sign Up&quot;, you agree to our{" "}
+            By clicking &quot;Signup&quot;, you agree to our{" "}
             <Link href="/privacy" className="text-[#2563EB] underline hover:no-underline">Privacy Policy</Link>
             {" "}and{" "}
             <Link href="/terms" className="text-[#2563EB] underline hover:no-underline">Terms of Service</Link>.
           </p>
-          <Button type="submit" variant="primary" size="md" className="w-full" disabled={loading}>
-            {loading ? "Signing up…" : "SIGN UP"}
-            <span className="ml-1" aria-hidden>→</span>
-          </Button>
         </form>
 
       <p className="mt-6 text-center text-sm text-white/70">

@@ -3,39 +3,9 @@
 import Link from "next/link";
 import Image from "next/image";
 import { useState } from "react";
-import { NavDropdown } from "./NavDropdown";
 import { UserMenu } from "./UserMenu";
 import { Button } from "@/components/ui/Button";
 import { useUser } from "@/lib/hooks/use-user";
-
-// Dropdown items aligned with AI SDR / RevOps platform (Agentible)
-const productsItems = [
-  { label: "AI SDR", href: "/products/ai-sdr" },
-  { label: "Lead Generation", href: "/products/lead-generation" },
-  { label: "Lead Enrichment", href: "/products/lead-enrichment" },
-  { label: "Smart Routing", href: "/products/smart-routing" },
-  { label: "Analytics & Reporting", href: "/products/analytics" },
-];
-
-const solutionsItems = [
-  { label: "For Sales Teams", href: "/solutions/sales-teams" },
-  { label: "For RevOps", href: "/solutions/revops" },
-  { label: "For B2B Outreach", href: "/solutions/b2b" },
-  { label: "For Agencies", href: "/solutions/agencies" },
-];
-
-const resourcesItems = [
-  { label: "Blog", href: "/blog" },
-  { label: "Documentation", href: "/docs" },
-  { label: "Case Studies", href: "/case-studies" },
-  { label: "Help Center", href: "/help" },
-];
-
-const toolsItems = [
-  { label: "ROI Calculator", href: "/tools/roi-calculator" },
-  { label: "Lead Scoring", href: "/tools/lead-scoring" },
-  { label: "API", href: "/developers" },
-];
 
 export function Header() {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -63,25 +33,27 @@ export function Header() {
 
         {/* Navigation */}
         <nav className="hidden lg:flex items-center gap-8">
-          <NavDropdown label="Products" items={productsItems} />
-          <NavDropdown label="Solutions" items={solutionsItems} />
+          <Link
+            href="/#how-it-works"
+            className="text-sm font-medium text-white/80 hover:text-white transition-colors"
+          >
+            How it works
+          </Link>
+          <Link
+            href="/about"
+            className="text-sm font-medium text-white/80 hover:text-white transition-colors"
+          >
+            About
+          </Link>
           <Link
             href="/pricing"
             className="text-sm font-medium text-white/80 hover:text-white transition-colors"
           >
             Pricing
           </Link>
-          <Link
-            href="/integrations"
-            className="text-sm font-medium text-white/80 hover:text-white transition-colors"
-          >
-            Integrations
-          </Link>
-          <NavDropdown label="Resources" items={resourcesItems} />
-          <NavDropdown label="Tools" items={toolsItems} />
         </nav>
 
-        {/* Actions: when logged in show UserMenu, else Book a Demo + Log In */}
+        {/* Actions: when logged in show UserMenu, else Log In + Get Started */}
         <div className="flex items-center gap-4 shrink-0">
           {loading ? (
             <span className="h-9 w-9 rounded-full bg-white/10 animate-pulse" aria-hidden />
@@ -89,12 +61,9 @@ export function Header() {
             <UserMenu profile={profile} user={user} />
           ) : (
             <>
-              <Button variant="primary" size="sm" className="hidden sm:inline-flex" asChild>
-                <Link href="/book-a-demo">Book a Demo</Link>
-              </Button>
               <Link
                 href="/signin"
-                className="hidden sm:inline text-sm font-medium text-white/80 hover:text-white transition-colors border-b border-dashed border-white/40 hover:border-white"
+                className="hidden sm:inline text-sm font-medium text-white/80 hover:text-white transition-colors"
               >
                 Log In
               </Link>
@@ -120,21 +89,10 @@ export function Header() {
       </div>
       {/* Mobile nav */}
       {mobileOpen && (
-        <div className="lg:hidden border-t border-white/10 bg-[#0f1419] px-6 py-4 space-y-3 max-h-[80vh] overflow-y-auto">
-          {productsItems.map((i) => (
-            <Link key={i.href} href={i.href} className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>{i.label}</Link>
-          ))}
-          {solutionsItems.map((i) => (
-            <Link key={i.href} href={i.href} className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>{i.label}</Link>
-          ))}
+        <div className="lg:hidden border-t border-white/10 bg-[#0f1419] px-6 py-4 space-y-3">
+          <Link href="/#how-it-works" className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>How it works</Link>
+          <Link href="/about" className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>About</Link>
           <Link href="/pricing" className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>Pricing</Link>
-          <Link href="/integrations" className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>Integrations</Link>
-          {resourcesItems.map((i) => (
-            <Link key={i.href} href={i.href} className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>{i.label}</Link>
-          ))}
-          {toolsItems.map((i) => (
-            <Link key={i.href} href={i.href} className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>{i.label}</Link>
-          ))}
           <div className="pt-2 border-t border-white/10 flex flex-col gap-2">
             {user ? (
               <>
@@ -144,9 +102,6 @@ export function Header() {
               </>
             ) : (
               <>
-                <Button variant="primary" size="sm" asChild>
-                  <Link href="/book-a-demo" onClick={() => setMobileOpen(false)}>Book a Demo</Link>
-                </Button>
                 <Link href="/signin" className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>Log In</Link>
                 <Button variant="primary" size="sm" asChild>
                   <Link href="/signup" onClick={() => setMobileOpen(false)}>Get Started</Link>
