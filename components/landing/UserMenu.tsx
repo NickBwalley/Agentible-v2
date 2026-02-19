@@ -8,8 +8,6 @@ import { createClient } from "@/lib/supabase/client";
 import { getAvatarUrl } from "@/lib/avatar";
 import type { UserProfile } from "@/types/user";
 
-const DEFAULT_CREDITS = 600;
-
 export interface UserMenuProps {
   profile: UserProfile | null;
   user: { id: string; email?: string } | null;
@@ -43,21 +41,7 @@ export function UserMenu({ profile, user }: UserMenuProps) {
   const subscription = profile?.subscription ?? "basic";
 
   return (
-    <div ref={ref} className="relative flex items-center gap-4 shrink-0">
-      <Link
-        href="/dashboard"
-        className="hidden sm:inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/5 px-3 py-2 text-sm font-medium text-white/90 hover:bg-white/10"
-      >
-        Buy Credits
-      </Link>
-      <span className="hidden sm:inline-flex items-center gap-1.5 text-sm text-white/80">
-        <span>{DEFAULT_CREDITS} credits</span>
-        <span className="text-white/50" title="Credit balance">
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-        </span>
-      </span>
+    <div ref={ref} className="relative flex items-center shrink-0">
       <button
         type="button"
         onClick={() => setOpen(!open)}
@@ -86,20 +70,28 @@ export function UserMenu({ profile, user }: UserMenuProps) {
 
       {open && (
         <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-xl border border-white/10 bg-[#111827] py-3 shadow-xl">
-          <div className="flex flex-col items-center px-4 pb-3 border-b border-white/10">
-            <span className="relative mt-1 flex h-14 w-14 shrink-0 overflow-hidden rounded-full border border-white/20 bg-[#2563EB]/80">
-              <Image
-                src={avatarUrl}
-                alt=""
-                fill
-                className="object-cover"
-                sizes="56px"
-              />
-            </span>
-            <p className="mt-2 text-sm font-medium text-white">{displayName}</p>
-            <span className="mt-1 rounded bg-[#2563EB]/20 px-2 py-0.5 text-xs font-medium text-[#93C5FD] uppercase tracking-wide">
-              {subscription}
-            </span>
+          <div className="px-4 pb-3 border-b border-white/10">
+            <div className="flex items-center gap-3 mb-3">
+              <span className="relative flex h-12 w-12 shrink-0 overflow-hidden rounded-full border border-white/20 bg-[#2563EB]/80">
+                <Image
+                  src={avatarUrl}
+                  alt=""
+                  fill
+                  className="object-cover"
+                  sizes="48px"
+                />
+              </span>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-white truncate">{displayName}</p>
+                <p className="text-xs text-white/60 truncate">{user.email || "No email"}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-white/50">Plan:</span>
+              <span className="rounded bg-[#2563EB]/20 px-2 py-0.5 text-xs font-medium text-[#93C5FD] uppercase tracking-wide">
+                {subscription}
+              </span>
+            </div>
           </div>
           <nav className="mt-2 flex flex-col">
             <Link
