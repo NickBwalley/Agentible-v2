@@ -103,7 +103,7 @@ const INDUSTRY_OPTIONS = [
   "Wireless",
 ];
 
-const TOTAL_STEPS = 7;
+const TOTAL_STEPS = 8;
 
 const N8N_WEBHOOK_URL =
   "https://n8n.srv1036993.hstgr.cloud/webhook-test/agentible-webapp";
@@ -197,6 +197,7 @@ type TriggerLeadGenerationResult =
 
 async function triggerLeadGeneration(
   body: Record<string, unknown>,
+  existingCampaignId?: string | null,
 ): Promise<TriggerLeadGenerationResult> {
   const supabase = createClient();
   const {
@@ -210,15 +211,21 @@ async function triggerLeadGeneration(
     return { error: "You must be signed in to fetch leads" };
   }
 
-  const campaignResult = await createCampaign(supabase, user.id);
-  if ("error" in campaignResult) {
-    return { error: campaignResult.error };
+  let campaignId: string;
+  if (existingCampaignId) {
+    campaignId = existingCampaignId;
+  } else {
+    const campaignResult = await createCampaign(supabase, user.id);
+    if ("error" in campaignResult) {
+      return { error: campaignResult.error };
+    }
+    campaignId = campaignResult.campaignId;
   }
 
   const batchResult = await createLeadBatch(
     supabase,
     user.id,
-    campaignResult.campaignId,
+    campaignId,
     typeof body.query_or_source === "string" ? body.query_or_source : null,
   );
   if ("error" in batchResult) {
@@ -227,7 +234,7 @@ async function triggerLeadGeneration(
 
   const payload = {
     user_id: user.id,
-    campaign_id: campaignResult.campaignId,
+    campaign_id: campaignId,
     lead_batch_id: batchResult.leadBatchId,
     ...body,
   };
@@ -263,7 +270,7 @@ async function triggerLeadGeneration(
     return {
       ok: true,
       message,
-      campaign_id: campaignResult.campaignId,
+      campaign_id: campaignId,
       lead_batch_id: batchResult.leadBatchId,
     };
   } catch (err) {
@@ -278,7 +285,9 @@ async function triggerLeadGeneration(
 
 export default function CreateCampaignPage() {
   const router = useRouter();
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState(0);
+  const [campaignName, setCampaignName] = useState("");
+  const [campaignId, setCampaignId] = useState<string | null>(null);
   const [leadSource, setLeadSource] = useState<"import" | "create" | null>(
     null,
   );
@@ -416,7 +425,7 @@ export default function CreateCampaignPage() {
         companyIndustryIncludes: formData.industryKeywords,
         totalResults: formData.maxLeadsToFetch,
       };
-      const result = await triggerLeadGeneration(leadGenBody);
+      const result = await triggerLeadGeneration(leadGenBody, campaignId);
       if ("error" in result) {
         setFetchLeadsError(result.error);
         return;
@@ -703,7 +712,7 @@ export default function CreateCampaignPage() {
 
         {/* Progress Steps */}
         <div className="mb-8 flex items-center justify-between">
-          {Array.from({ length: TOTAL_STEPS }, (_, i) => i + 1).map((s) => (
+          {Array.from({ length: TOTAL_STEPS }, (_, i) => i).map((s) => (
             <div key={s} className="flex items-center flex-1">
               <div
                 className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium shrink-0 ${
@@ -712,9 +721,9 @@ export default function CreateCampaignPage() {
                     : "bg-white/10 text-white/60"
                 }`}
               >
-                {s}
+                {s + 1}
               </div>
-              {s < TOTAL_STEPS && (
+              {s < TOTAL_STEPS - 1 && (
                 <div
                   className={`flex-1 h-0.5 mx-1 ${
                     s < step ? "bg-[#2563EB]" : "bg-white/10"
@@ -727,6 +736,57 @@ export default function CreateCampaignPage() {
 
         {/* Step Content */}
         <div className="rounded-lg border border-white/10 bg-white/5 p-6 md:p-8">
+          {step === 0 && (
+            <div>
+              <h2 className="text-xl font-semibold text-white mb-2">
+                Name your campaign
+              </h2>
+              <p className="text-white/70 mb-6 text-sm">
+                Enter a name so you can track this campaign and its metrics
+                easily.
+              </p>
+              <div className="space-y-4 max-w-md">
+                <div>
+                  <Label htmlFor="campaign-name" className="text-white/90 mb-2 block">
+                    Campaign name
+                  </Label>
+                  <Input
+                    id="campaign-name"
+                    type="text"
+                    value={campaignName}
+                    onChange={(e) => setCampaignName(e.target.value)}
+                    placeholder="e.g. Q1 Enterprise Outreach"
+                    className="bg-white/5 border-white/20 text-white placeholder:text-white/40"
+                  />
+                </div>
+                <Button
+                  variant="primary"
+                  size="md"
+                  onClick={async () => {
+                    const name = campaignName.trim();
+                    if (!name) return;
+                    const supabase = createClient();
+                    const {
+                      data: { user },
+                    } = await supabase.auth.getUser();
+                    if (!user?.id) return;
+                    const result = await createCampaign(supabase, user.id, name);
+                    if ("error" in result) {
+                      setFetchLeadsError(result.error);
+                      return;
+                    }
+                    setCampaignId(result.campaignId);
+                    setFetchLeadsError(null);
+                    setStep(1);
+                  }}
+                  disabled={!campaignName.trim()}
+                  className="w-full"
+                >
+                  Next: Choose lead source
+                </Button>
+              </div>
+            </div>
+          )}
           {step === 1 && (
             <div>
               {leadSource === null ? (

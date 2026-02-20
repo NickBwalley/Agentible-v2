@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
+import { useParams } from "next/navigation";
 import Link from "next/link";
+import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
 import {
   Table,
@@ -13,45 +14,22 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-// Mock data - replace with actual API calls
-const mockCampaignMetrics = {
-  delivered: 500,
-  inboxRate: 87.5,
-  replies: 25,
-  qualified: 18,
-  meetings: 5,
+// Metrics initialized to 0 until wired to real data
+const campaignMetrics = {
+  delivered: 0,
+  inboxRate: 0,
+  replies: 0,
+  qualified: 0,
+  meetings: 0,
 };
 
-const mockReplies = [
-  {
-    id: "1",
-    leadName: "John Smith",
-    company: "Acme Corp",
-    replyType: "positive" as const,
-    qualified: true,
-  },
-  {
-    id: "2",
-    leadName: "Sarah Johnson",
-    company: "TechStart Inc",
-    replyType: "positive" as const,
-    qualified: true,
-  },
-  {
-    id: "3",
-    leadName: "Mike Davis",
-    company: "Global Solutions",
-    replyType: "neutral" as const,
-    qualified: false,
-  },
-  {
-    id: "4",
-    leadName: "Emily Chen",
-    company: "Innovate Labs",
-    replyType: "negative" as const,
-    qualified: false,
-  },
-];
+const mockReplies: Array<{
+  id: string;
+  leadName: string;
+  company: string;
+  replyType: "positive" | "neutral" | "negative";
+  qualified: boolean;
+}> = [];
 
 const replyTypeColors = {
   positive: "bg-emerald-500/20 text-emerald-400",
@@ -61,9 +39,22 @@ const replyTypeColors = {
 
 export default function CampaignDetailPage() {
   const params = useParams();
-  const router = useRouter();
   const campaignId = params.id as string;
+  const [campaignName, setCampaignName] = useState<string | null>(null);
   const [replies, setReplies] = useState(mockReplies);
+
+  useEffect(() => {
+    async function load() {
+      const supabase = createClient();
+      const { data } = await supabase
+        .from("campaigns")
+        .select("name")
+        .eq("id", campaignId)
+        .maybeSingle();
+      setCampaignName(data?.name ?? null);
+    }
+    load();
+  }, [campaignId]);
 
   const toggleQualified = (replyId: string) => {
     setReplies((prev) =>
@@ -83,8 +74,10 @@ export default function CampaignDetailPage() {
               ← Back to Dashboard
             </Button>
           </Link>
-          <h1 className="text-3xl font-bold text-white mb-2">Campaign Details</h1>
-          <p className="text-white/60">Campaign ID: {campaignId}</p>
+          <h1 className="text-3xl font-bold text-white mb-2">
+            {campaignName ?? "Campaign Details"}
+          </h1>
+          <p className="text-white/60 text-sm">Campaign ID: {campaignId}</p>
         </div>
 
         {/* Section 1 - Metrics */}
@@ -94,31 +87,31 @@ export default function CampaignDetailPage() {
             <div className="rounded-lg border border-white/10 bg-white/5 p-4">
               <div className="text-sm text-white/70 mb-1">Delivered</div>
               <div className="text-2xl font-bold text-white">
-                {mockCampaignMetrics.delivered.toLocaleString()}
+                {campaignMetrics.delivered.toLocaleString()}
               </div>
             </div>
             <div className="rounded-lg border border-white/10 bg-white/5 p-4">
               <div className="text-sm text-white/70 mb-1">Inbox %</div>
               <div className="text-2xl font-bold text-white">
-                {mockCampaignMetrics.inboxRate.toFixed(1)}%
+                {campaignMetrics.inboxRate.toFixed(1)}%
               </div>
             </div>
             <div className="rounded-lg border border-white/10 bg-white/5 p-4">
               <div className="text-sm text-white/70 mb-1">Replies</div>
               <div className="text-2xl font-bold text-white">
-                {mockCampaignMetrics.replies.toLocaleString()}
+                {campaignMetrics.replies.toLocaleString()}
               </div>
             </div>
             <div className="rounded-lg border border-white/10 bg-white/5 p-4">
               <div className="text-sm text-white/70 mb-1">Qualified</div>
               <div className="text-2xl font-bold text-white">
-                {mockCampaignMetrics.qualified.toLocaleString()}
+                {campaignMetrics.qualified.toLocaleString()}
               </div>
             </div>
             <div className="rounded-lg border border-white/10 bg-white/5 p-4">
               <div className="text-sm text-white/70 mb-1">Meetings</div>
               <div className="text-2xl font-bold text-white">
-                {mockCampaignMetrics.meetings.toLocaleString()}
+                {campaignMetrics.meetings.toLocaleString()}
               </div>
             </div>
           </div>
@@ -138,7 +131,14 @@ export default function CampaignDetailPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {replies.map((reply) => (
+                {replies.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={4} className="text-center py-8 text-white/60">
+                      No replies yet.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                replies.map((reply) => (
                   <TableRow key={reply.id} className="border-white/10">
                     <TableCell className="text-white font-medium">{reply.leadName}</TableCell>
                     <TableCell className="text-white/90">{reply.company}</TableCell>
@@ -164,7 +164,8 @@ export default function CampaignDetailPage() {
                       </button>
                     </TableCell>
                   </TableRow>
-                ))}
+                ))
+                )}
               </TableBody>
             </Table>
           </div>

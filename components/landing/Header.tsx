@@ -3,6 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { useState } from "react";
+import { usePathname } from "next/navigation";
 import { UserMenu } from "./UserMenu";
 import { Button } from "@/components/ui/Button";
 import { useUser } from "@/lib/hooks/use-user";
@@ -10,6 +11,8 @@ import { useUser } from "@/lib/hooks/use-user";
 export function Header() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const { user, profile, loading } = useUser();
+  const pathname = usePathname();
+  const isDashboard = pathname === "/dashboard";
 
   return (
     <header className="fixed top-0 left-0 right-0 z-50 w-full border-b border-white/10 bg-[#0f1419]/95 backdrop-blur-sm">
@@ -33,6 +36,18 @@ export function Header() {
 
         {/* Navigation */}
         <nav className="hidden lg:flex items-center gap-8">
+          {user && (
+            <Link
+              href="/dashboard"
+              className={`text-sm font-medium transition-colors relative pb-0.5 ${
+                isDashboard
+                  ? "text-[#2563EB] hover:text-[#3b82f6] border-b-2 border-[#2563EB]"
+                  : "text-white/80 hover:text-white"
+              }`}
+            >
+              Dashboard
+            </Link>
+          )}
           <Link
             href="/#how-it-works"
             className="text-sm font-medium text-white/80 hover:text-white transition-colors"
@@ -90,6 +105,15 @@ export function Header() {
       {/* Mobile nav */}
       {mobileOpen && (
         <div className="lg:hidden border-t border-white/10 bg-[#0f1419] px-6 py-4 space-y-3">
+          {user && (
+            <Link
+              href="/dashboard"
+              className={`block py-1 ${isDashboard ? "text-[#2563EB] font-medium border-b border-[#2563EB]/50 w-fit" : "text-white/90 hover:text-white"}`}
+              onClick={() => setMobileOpen(false)}
+            >
+              Dashboard
+            </Link>
+          )}
           <Link href="/#how-it-works" className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>How it works</Link>
           <Link href="/about" className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>About</Link>
           <Link href="/pricing" className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>Pricing</Link>
