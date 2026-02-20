@@ -5,12 +5,24 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
-  title: "Agentible | AI that converts leads and makes you money",
+  title: "Agentible.dev",
+  icons: {
+    icon: "/logo/Agentible-logo.jpeg",
+  },
   description:
-    "An AI Employee that puts in the work 24/7, turning leads into loyal customers. Automated SDR Lead Generation, Qualification, Enrichment, Research, Routing & Follow-Up.",
+    "Cold Outreach Automation Platform for B2B Sales and Marketing Teams.",
   openGraph: {
-    title: "Agentible | AI that converts leads and makes you money",
+    title: "Agentible.dev",
+    description:
+      "Cold Outreach Automation Platform for B2B Sales and Marketing Teams.",
     url: "https://agentible.dev",
+    images: [
+      {
+        url: "https://agentible.dev/og-image.png",
+        width: 1200,
+        height: 630,
+      },
+    ],
   },
 };
 

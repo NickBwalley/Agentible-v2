@@ -1,6 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
+import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
 import {
   Table,
@@ -32,6 +34,8 @@ export type Campaign = {
 
 interface CampaignsTableProps {
   campaigns: Campaign[];
+  /** Called after a campaign is successfully deleted; use to update list (e.g. remove from state). */
+  onCampaignDeleted?: (campaignId: string) => void;
 }
 
 const statusColors: Record<CampaignStatusDisplay, string> = {
@@ -56,9 +60,68 @@ function formatLastActivity(isoDate: string | null): string {
   return d.toLocaleDateString();
 }
 
-export function CampaignsTable({ campaigns }: CampaignsTableProps) {
+export function CampaignsTable({ campaigns, onCampaignDeleted }: CampaignsTableProps) {
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const handleDeleteCampaign = async (campaignId: string, campaignName: string) => {
+    const confirmed = window.confirm(
+      `Do you want to delete the campaign "${campaignName}"? This will permanently delete all leads and related data for this campaign.`
+    );
+    if (!confirmed) return;
+
+    setDeleteError(null);
+    setDeletingId(campaignId);
+    try {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setDeleteError("You must be signed in to delete a campaign.");
+        return;
+      }
+
+      // Delete in order: leads -> lead_batches -> campaign (FKs and RLS)
+      const { error: leadsError } = await supabase
+        .from("leads")
+        .delete()
+        .eq("campaign_id", campaignId);
+      if (leadsError) {
+        setDeleteError(leadsError.message);
+        return;
+      }
+
+      const { error: batchesError } = await supabase
+        .from("lead_batches")
+        .delete()
+        .eq("campaign_id", campaignId);
+      if (batchesError) {
+        setDeleteError(batchesError.message);
+        return;
+      }
+
+      const { error: campaignError } = await supabase
+        .from("campaigns")
+        .delete()
+        .eq("id", campaignId)
+        .eq("user_id", user.id);
+      if (campaignError) {
+        setDeleteError(campaignError.message);
+        return;
+      }
+
+      onCampaignDeleted?.(campaignId);
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   return (
     <div className="rounded-lg border border-white/10 bg-white/5 overflow-hidden">
+      {deleteError && (
+        <div className="px-4 py-2 bg-red-500/10 border-b border-white/10 text-red-400 text-sm" role="alert">
+          {deleteError}
+        </div>
+      )}
       <Table>
         <TableHeader>
           <TableRow className="border-white/10">
@@ -97,12 +160,21 @@ export function CampaignsTable({ campaigns }: CampaignsTableProps) {
                 <TableCell className="text-white/90">{campaign.notOpened.toLocaleString()}</TableCell>
                 <TableCell className="text-white/90">{campaign.meetings.toLocaleString()}</TableCell>
                 <TableCell className="text-white/60 text-sm">{campaign.lastActivity}</TableCell>
-                <TableCell>
+                <TableCell className="flex items-center gap-2">
                   <Link href={`/dashboard/campaigns/${campaign.id}`}>
-                    <Button variant="ghost" size="sm">
+                    <Button variant="primary" size="sm">
                       View Campaign
                     </Button>
                   </Link>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                    disabled={deletingId !== null}
+                    onClick={() => handleDeleteCampaign(campaign.id, campaign.name || "Unnamed campaign")}
+                  >
+                    {deletingId === campaign.id ? "Deleting…" : "Delete Campaign"}
+                  </Button>
                 </TableCell>
               </TableRow>
             ))

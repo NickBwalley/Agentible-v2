@@ -107,7 +107,10 @@ export default function DashboardPage() {
               Loading campaigns…
             </div>
           ) : (
-            <CampaignsTable campaigns={campaigns} />
+            <CampaignsTable
+              campaigns={campaigns}
+              onCampaignDeleted={(id) => setCampaigns((prev) => prev.filter((c) => c.id !== id))}
+            />
           )}
         </div>
       </div>

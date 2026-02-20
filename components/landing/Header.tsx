@@ -12,7 +12,7 @@ export function Header() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const { user, profile, loading } = useUser();
   const pathname = usePathname();
-  const isDashboard = pathname === "/dashboard";
+  const isDashboard = pathname?.startsWith("/dashboard") ?? false;
 
   return (
     <header className="fixed top-0 left-0 right-0 z-50 w-full border-b border-white/10 bg-[#0f1419]/95 backdrop-blur-sm">
@@ -39,10 +39,10 @@ export function Header() {
           {user && (
             <Link
               href="/dashboard"
-              className={`text-sm font-medium transition-colors relative pb-0.5 ${
+              className={`text-sm font-medium transition-colors relative ${
                 isDashboard
-                  ? "text-[#2563EB] hover:text-[#3b82f6] border-b-2 border-[#2563EB]"
-                  : "text-white/80 hover:text-white"
+                  ? "text-[#2563EB] hover:text-[#3b82f6] border-b-2 border-[#2563EB] pb-0.5"
+                  : "text-white/80 hover:text-white pb-0.5"
               }`}
             >
               Dashboard
