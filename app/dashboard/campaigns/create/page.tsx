@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { createClient } from "@/lib/supabase/client";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -106,6 +108,12 @@ const TOTAL_STEPS = 7;
 const N8N_WEBHOOK_URL =
   "https://n8n.srv1036993.hstgr.cloud/webhook-test/agentible-webapp";
 
+/** GET URL for campaign status (optional). If not set, status is read from Supabase campaigns.status. */
+const N8N_STATUS_GET_URL =
+  typeof process !== "undefined"
+    ? (process.env.NEXT_PUBLIC_N8N_STATUS_GET_URL ?? "")
+    : "";
+
 const MAX_LEADS_MIN = 100;
 const MAX_LEADS_MAX = 1000;
 
@@ -128,6 +136,146 @@ const EMAIL_PLACEHOLDERS = [
   "Break-up / last touch",
 ];
 
+// --- Campaign + lead generation (Supabase + n8n webhook) ---
+
+type CreateCampaignResult = { campaignId: string } | { error: string };
+
+async function createCampaign(
+  supabase: SupabaseClient,
+  userId: string,
+  name?: string | null,
+): Promise<CreateCampaignResult> {
+  const { data, error } = await supabase
+    .from("campaigns")
+    .insert({
+      user_id: userId,
+      name: name ?? null,
+      status: "draft",
+    })
+    .select("id")
+    .single();
+
+  if (error) {
+    return { error: error.message };
+  }
+  if (!data?.id) {
+    return { error: "Campaign created but no id returned" };
+  }
+  return { campaignId: data.id };
+}
+
+type CreateLeadBatchResult = { leadBatchId: string } | { error: string };
+
+async function createLeadBatch(
+  supabase: SupabaseClient,
+  userId: string,
+  campaignId: string,
+  queryOrSource?: string | null,
+): Promise<CreateLeadBatchResult> {
+  const { data, error } = await supabase
+    .from("lead_batches")
+    .insert({
+      user_id: userId,
+      campaign_id: campaignId,
+      query_or_source: queryOrSource ?? null,
+    })
+    .select("id")
+    .single();
+
+  if (error) {
+    return { error: error.message };
+  }
+  if (!data?.id) {
+    return { error: "Lead batch created but no id returned" };
+  }
+  return { leadBatchId: data.id };
+}
+
+type TriggerLeadGenerationResult =
+  | { ok: true; message: string; campaign_id: string; lead_batch_id: string }
+  | { error: string };
+
+async function triggerLeadGeneration(
+  body: Record<string, unknown>,
+): Promise<TriggerLeadGenerationResult> {
+  const supabase = createClient();
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+  if (authError) {
+    return { error: authError.message };
+  }
+  if (!user?.id) {
+    return { error: "You must be signed in to fetch leads" };
+  }
+
+  const campaignResult = await createCampaign(supabase, user.id);
+  if ("error" in campaignResult) {
+    return { error: campaignResult.error };
+  }
+
+  const batchResult = await createLeadBatch(
+    supabase,
+    user.id,
+    campaignResult.campaignId,
+    typeof body.query_or_source === "string" ? body.query_or_source : null,
+  );
+  if ("error" in batchResult) {
+    return { error: batchResult.error };
+  }
+
+  const payload = {
+    user_id: user.id,
+    campaign_id: campaignResult.campaignId,
+    lead_batch_id: batchResult.leadBatchId,
+    ...body,
+  };
+
+  try {
+    const res = await fetch(N8N_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const json = await res.json().catch(() => null);
+    if (!res.ok) {
+      const text =
+        json &&
+        typeof json === "object" &&
+        "message" in json &&
+        typeof (json as { message: unknown }).message === "string"
+          ? (json as { message: string }).message
+          : typeof json === "string"
+            ? json
+            : null;
+      return {
+        error: text || `Webhook responded with ${res.status}`,
+      };
+    }
+    const message =
+      json &&
+      typeof json === "object" &&
+      "message" in json &&
+      typeof (json as { message: unknown }).message === "string"
+        ? (json as { message: string }).message
+        : "Leads request received.";
+    return {
+      ok: true,
+      message,
+      campaign_id: campaignResult.campaignId,
+      lead_batch_id: batchResult.leadBatchId,
+    };
+  } catch (err) {
+    return {
+      error:
+        err instanceof Error
+          ? err.message
+          : "Failed to send request. Please try again.",
+    };
+  }
+}
+
 export default function CreateCampaignPage() {
   const router = useRouter();
   const [step, setStep] = useState(1);
@@ -146,23 +294,44 @@ export default function CreateCampaignPage() {
     industryKeywords: [] as string[],
     maxLeadsToFetch: 100,
   });
-  // Review & Approve Leads (Step 3)
-  const [reviewCounts, setReviewCounts] = useState({
-    fetched: 320,
-    duplicatesRemoved: 12,
-    valid: 280,
-    risky: 18,
-    invalid: 8,
-    missingFields: 2,
-  });
-  const [includeValidOnly, setIncludeValidOnly] = useState(true);
-  const [includeRisky, setIncludeRisky] = useState(false);
-  const [excludeRoleBasedEmails, setExcludeRoleBasedEmails] = useState(true);
-  const [excludeFreeEmailDomains, setExcludeFreeEmailDomains] = useState(true);
   const [leadsApproved, setLeadsApproved] = useState(false);
   const [fetchLeadsLoading, setFetchLeadsLoading] = useState(false);
   const [fetchLeadsError, setFetchLeadsError] = useState<string | null>(null);
+  const [fetchLeadsResult, setFetchLeadsResult] = useState<{
+    message: string;
+    campaign_id: string;
+    lead_batch_id?: string;
+  } | null>(null);
+  const [acknowledgedLeadsRequest, setAcknowledgedLeadsRequest] =
+    useState(false);
   const [detectedCsvColumns, setDetectedCsvColumns] = useState<string[]>([]);
+  // Launch step: campaign status from webhook GET or Supabase
+  const [campaignStatus, setCampaignStatus] = useState<
+    "pending" | "completed" | null
+  >(null);
+  const [campaignStatusMessage, setCampaignStatusMessage] = useState<
+    string | null
+  >(null);
+  const [campaignStatusLoading, setCampaignStatusLoading] = useState(false);
+  const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Campaign + leads fetch (step 7): campaign_id + user_id match, verified count, preview/download
+  type LeadRow = {
+    id: string;
+    full_name: string | null;
+    email: string;
+    email_status: string;
+    position: string | null;
+    country: string | null;
+    org_name: string | null;
+    org_website: string | null;
+  };
+  const [campaignLeads, setCampaignLeads] = useState<LeadRow[]>([]);
+  const [verifiedLeadsCount, setVerifiedLeadsCount] = useState<number | null>(
+    null,
+  );
+  const [campaignDataFetched, setCampaignDataFetched] = useState(false);
+  const [leadsPreviewOpen, setLeadsPreviewOpen] = useState(false);
+  const [campaignDataLoading, setCampaignDataLoading] = useState(false);
   // Launch checklist (sendingAccountConnected can be wired to real account check)
   const [sendingAccountConnected] = useState(true);
   // AI email modal
@@ -233,7 +402,7 @@ export default function CreateCampaignPage() {
     setFetchLeadsError(null);
     setFetchLeadsLoading(true);
     try {
-      const payload = {
+      const leadGenBody = {
         companyDomainMatchMode: "contains",
         emailStatus: "verified",
         hasEmail: true,
@@ -247,29 +416,20 @@ export default function CreateCampaignPage() {
         companyIndustryIncludes: formData.industryKeywords,
         totalResults: formData.maxLeadsToFetch,
       };
-      const res = await fetch(N8N_WEBHOOK_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        throw new Error(`Webhook responded with ${res.status}`);
+      const result = await triggerLeadGeneration(leadGenBody);
+      if ("error" in result) {
+        setFetchLeadsError(result.error);
+        return;
       }
+      setFetchLeadsResult({
+        message: result.message,
+        campaign_id: result.campaign_id,
+        lead_batch_id: result.lead_batch_id,
+      });
       setStep(3);
-    } catch (err) {
-      setFetchLeadsError(
-        err instanceof Error
-          ? err.message
-          : "Failed to send request. Please try again.",
-      );
     } finally {
       setFetchLeadsLoading(false);
     }
-  };
-
-  const handleUseSelectedLeads = () => {
-    setLeadsApproved(true);
-    setStep(4);
   };
 
   const handleGenerateAiEmails = () => {
@@ -316,6 +476,212 @@ export default function CreateCampaignPage() {
     leadsApproved &&
     formData.emails.filter((e) => e.trim()).length >= 3 &&
     sendingAccountConnected;
+
+  // When on Launch step with a campaign_id, fetch status (GET webhook or Supabase) until completed
+  useEffect(() => {
+    const campaignId = fetchLeadsResult?.campaign_id;
+    if (step !== 7 || !campaignId) {
+      if (campaignId == null) {
+        setCampaignStatus(null);
+        setCampaignStatusMessage(null);
+      }
+      return;
+    }
+
+    const fetchStatus = async () => {
+      setCampaignStatusLoading(true);
+      try {
+        if (N8N_STATUS_GET_URL) {
+          const url = `${N8N_STATUS_GET_URL}${N8N_STATUS_GET_URL.includes("?") ? "&" : "?"}campaign_id=${encodeURIComponent(campaignId)}`;
+          const res = await fetch(url, { method: "GET" });
+          const json = await res.json().catch(() => null);
+          const status =
+            json && typeof json === "object" && "status" in json
+              ? String((json as { status: unknown }).status).toLowerCase()
+              : "";
+          const message =
+            json &&
+            typeof json === "object" &&
+            "message" in json &&
+            typeof (json as { message: unknown }).message === "string"
+              ? (json as { message: string }).message
+              : null;
+          if (status === "completed" || status === "done") {
+            setCampaignStatus("completed");
+            setCampaignStatusMessage(
+              message ?? "Campaign processing completed.",
+            );
+            if (statusPollRef.current) {
+              clearInterval(statusPollRef.current);
+              statusPollRef.current = null;
+            }
+          } else if (message) {
+            setCampaignStatusMessage(message);
+          }
+        } else {
+          const supabase = createClient();
+          const { data, error } = await supabase
+            .from("campaigns")
+            .select("status")
+            .eq("id", campaignId)
+            .single();
+          if (!error && data?.status === "done") {
+            setCampaignStatus("completed");
+            setCampaignStatusMessage("Campaign processing completed.");
+            if (statusPollRef.current) {
+              clearInterval(statusPollRef.current);
+              statusPollRef.current = null;
+            }
+          }
+        }
+      } finally {
+        setCampaignStatusLoading(false);
+      }
+    };
+
+    setCampaignStatus("pending");
+    fetchStatus();
+    statusPollRef.current = setInterval(fetchStatus, 4000);
+
+    return () => {
+      if (statusPollRef.current) {
+        clearInterval(statusPollRef.current);
+        statusPollRef.current = null;
+      }
+    };
+  }, [step, fetchLeadsResult?.campaign_id]);
+
+  const fetchLeadsFromDb = async () => {
+    const campaignId = fetchLeadsResult?.campaign_id;
+    if (!campaignId) return;
+    setCampaignDataLoading(true);
+    try {
+      const supabase = createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) {
+        setCampaignDataLoading(false);
+        return;
+      }
+
+      const { data: campaign, error: campaignError } = await supabase
+        .from("campaigns")
+        .select("id")
+        .eq("id", campaignId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (campaignError || !campaign) {
+        setCampaignDataLoading(false);
+        return;
+      }
+
+      // Resolve lead_batch_id: use stored from lead-gen flow, or latest batch for this campaign + user
+      let leadBatchId: string | null = fetchLeadsResult?.lead_batch_id ?? null;
+      if (!leadBatchId) {
+        const { data: batch } = await supabase
+          .from("lead_batches")
+          .select("id")
+          .eq("user_id", user.id)
+          .eq("campaign_id", campaignId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        leadBatchId = batch?.id ?? null;
+      }
+
+      // Fetch leads by user_id, campaign_id, and lead_batch_id for exact count and list
+      let leadsQuery = supabase
+        .from("leads")
+        .select(
+          "id, full_name, email, email_status, position, country, org_name, org_website",
+        )
+        .eq("user_id", user.id)
+        .eq("campaign_id", campaignId);
+
+      if (leadBatchId) {
+        leadsQuery = leadsQuery.eq("lead_batch_id", leadBatchId);
+      }
+
+      const { data: leads, error: leadsError } = await leadsQuery;
+
+      if (leadsError) {
+        setCampaignDataLoading(false);
+        return;
+      }
+
+      const rows: LeadRow[] = (leads ?? []).map((l) => ({
+        id: l.id,
+        full_name: l.full_name ?? null,
+        email: l.email,
+        email_status: l.email_status ?? "unknown",
+        position: l.position ?? null,
+        country: l.country ?? null,
+        org_name: l.org_name ?? null,
+        org_website: l.org_website ?? null,
+      }));
+
+      const verified = rows.filter((r) => r.email_status === "valid").length;
+      setCampaignLeads(rows);
+      setVerifiedLeadsCount(verified);
+
+      await supabase
+        .from("campaigns")
+        .update({ status: "done" })
+        .eq("id", campaignId)
+        .eq("user_id", user.id);
+
+      setCampaignDataFetched(true);
+    } finally {
+      setCampaignDataLoading(false);
+    }
+  };
+
+  const downloadLeadsCsv = () => {
+    if (campaignLeads.length === 0) return;
+    const headers = [
+      "full_name",
+      "email",
+      "email_status",
+      "position",
+      "country",
+      "org_name",
+      "org_website",
+    ];
+    const escape = (v: string | null) =>
+      v == null
+        ? ""
+        : /[,"\n]/.test(v)
+          ? `"${String(v).replace(/"/g, '""')}"`
+          : v;
+    const rows = campaignLeads.map((l) =>
+      [
+        escape(l.full_name),
+        escape(l.email),
+        escape(l.email_status),
+        escape(l.position),
+        escape(l.country),
+        escape(l.org_name),
+        escape(l.org_website),
+      ].join(","),
+    );
+    const csv = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `campaign-leads-${fetchLeadsResult?.campaign_id ?? "export"}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const isLaunchEnabled = () => {
+    const base = canLaunch();
+    const campaignId = fetchLeadsResult?.campaign_id;
+    if (!campaignId) return base;
+    return base && (campaignStatus === "completed" || campaignDataFetched);
+  };
 
   return (
     <div className="min-h-screen bg-[#0f1419] pt-24 pb-20 px-6">
@@ -603,7 +969,9 @@ export default function CreateCampaignPage() {
                       disabled={!canFetchLeads() || fetchLeadsLoading}
                       className="w-full"
                     >
-                      {fetchLeadsLoading ? "Sending…" : "Fetch Leads"}
+                      {fetchLeadsLoading
+                        ? "Please wait as we generate leads…"
+                        : "Fetch Leads"}
                     </Button>
                     <p className="text-center text-xs text-white/50">
                       Next: we verify and clean emails before you can launch.
@@ -617,182 +985,61 @@ export default function CreateCampaignPage() {
           {/* Step 3: Review & Approve Leads */}
           {step === 3 && (
             <div>
-              <h2 className="text-xl font-semibold text-white mb-2">
-                Review &amp; Approve Leads
-              </h2>
-              <p className="text-white/60 text-sm mb-6">
-                Quality gate: review counts and filters, then approve to
-                continue.
-              </p>
-              <div className="rounded-lg border border-white/10 bg-white/5 p-4 mb-6 grid grid-cols-2 sm:grid-cols-3 gap-3 text-center">
-                <div>
-                  <div className="text-2xl font-bold text-white">
-                    {reviewCounts.fetched}
+              {leadSource === "create" &&
+              fetchLeadsResult &&
+              !acknowledgedLeadsRequest ? (
+                <div className="rounded-lg border border-white/10 bg-white/5 p-6 mb-6">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center">
+                      <span className="text-emerald-400 text-lg">✓</span>
+                    </div>
+                    <h2 className="text-xl font-semibold text-white">
+                      {fetchLeadsResult.message}
+                    </h2>
                   </div>
-                  <div className="text-xs text-white/60">Fetched</div>
-                </div>
-                <div>
-                  <div className="text-2xl font-bold text-white/90">
-                    {reviewCounts.duplicatesRemoved}
+                  <p className="text-white/80 text-sm mb-4">
+                    Please proceed to the next step to review and approve the
+                    leads.
+                  </p>
+                  <div className="rounded bg-white/5 border border-white/10 p-3 mb-6 font-mono text-sm text-white/90 break-all">
+                    <span className="text-white/50">Campaign ID: </span>
+                    {fetchLeadsResult.campaign_id}
                   </div>
-                  <div className="text-xs text-white/60">
-                    Duplicates removed
-                  </div>
-                </div>
-                <div>
-                  <div className="text-2xl font-bold text-emerald-400">
-                    {reviewCounts.valid}
-                  </div>
-                  <div className="text-xs text-white/60">Valid</div>
-                </div>
-                <div>
-                  <div className="text-2xl font-bold text-amber-400">
-                    {reviewCounts.risky}
-                  </div>
-                  <div className="text-xs text-white/60">Risky</div>
-                </div>
-                <div>
-                  <div className="text-2xl font-bold text-red-400">
-                    {reviewCounts.invalid}
-                  </div>
-                  <div className="text-xs text-white/60">Invalid</div>
-                </div>
-                <div>
-                  <div className="text-2xl font-bold text-white/70">
-                    {reviewCounts.missingFields}
-                  </div>
-                  <div className="text-xs text-white/60">Missing fields</div>
-                </div>
-              </div>
-              <div className="space-y-3 mb-6">
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={includeValidOnly}
-                    onChange={(e) => setIncludeValidOnly(e.target.checked)}
-                    className="h-4 w-4 rounded text-[#2563EB]"
-                  />
-                  <span className="text-sm text-white/90">
-                    Include valid only
-                  </span>
-                </label>
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={includeRisky}
-                    onChange={(e) => setIncludeRisky(e.target.checked)}
-                    className="h-4 w-4 rounded text-[#2563EB]"
-                  />
-                  <span className="text-sm text-white/90">Include risky</span>
-                </label>
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={excludeRoleBasedEmails}
-                    onChange={(e) =>
-                      setExcludeRoleBasedEmails(e.target.checked)
-                    }
-                    className="h-4 w-4 rounded text-[#2563EB]"
-                  />
-                  <span className="text-sm text-white/90">
-                    Exclude role-based emails
-                  </span>
-                  <span
-                    className="text-white/50"
-                    title="e.g. info@, sales@, support@"
+                  <Button
+                    onClick={() => {
+                      setAcknowledgedLeadsRequest(true);
+                      setLeadsApproved(true);
+                      setStep(4);
+                    }}
+                    className="w-full sm:w-auto"
                   >
-                    ⓘ
-                  </span>
-                </label>
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={excludeFreeEmailDomains}
-                    onChange={(e) =>
-                      setExcludeFreeEmailDomains(e.target.checked)
-                    }
-                    className="h-4 w-4 rounded text-[#2563EB]"
-                  />
-                  <span className="text-sm text-white/90">
-                    Exclude free email domains (Gmail, Yahoo, etc.)
-                  </span>
-                </label>
-              </div>
-              <div className="overflow-x-auto rounded-lg border border-white/10 mb-6">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-white/10">
-                      <th className="text-left p-2 text-white/70 font-medium">
-                        Name
-                      </th>
-                      <th className="text-left p-2 text-white/70 font-medium">
-                        Title
-                      </th>
-                      <th className="text-left p-2 text-white/70 font-medium">
-                        Company
-                      </th>
-                      <th className="text-left p-2 text-white/70 font-medium">
-                        Email
-                      </th>
-                      <th className="text-left p-2 text-white/70 font-medium">
-                        Email Status
-                      </th>
-                      <th className="text-left p-2 text-white/70 font-medium">
-                        Phone
-                      </th>
-                      <th className="text-left p-2 text-white/70 font-medium">
-                        Website
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {previewRows.map((row, i) => (
-                      <tr key={i} className="border-b border-white/5">
-                        <td className="p-2 text-white/90">{row.name}</td>
-                        <td className="p-2 text-white/80">{row.title}</td>
-                        <td className="p-2 text-white/80">{row.company}</td>
-                        <td className="p-2 text-white/80">{row.email}</td>
-                        <td className="p-2">
-                          <span className="text-emerald-400 text-xs">
-                            {row.emailStatus}
-                          </span>
-                        </td>
-                        <td className="p-2 text-white/70">
-                          {row.phone || "—"}
-                        </td>
-                        <td className="p-2 text-white/70">{row.website}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <p className="p-2 text-xs text-white/50 border-t border-white/10">
-                  Showing first 50 of {reviewCounts.valid} valid leads
-                </p>
-              </div>
-              <div className="flex flex-col sm:flex-row gap-3">
-                <Button variant="secondary" size="md" className="flex-1">
-                  Download Cleaned CSV
-                </Button>
-                <Button
-                  variant="primary"
-                  size="md"
-                  className="flex-1"
-                  onClick={handleUseSelectedLeads}
-                  disabled={reviewCounts.valid < 50}
-                >
-                  Use Selected Leads
-                </Button>
-              </div>
-              {reviewCounts.valid < 50 && (
-                <p className="mt-2 text-sm text-amber-400">
-                  Need at least 50 valid leads to launch a campaign.
-                </p>
+                    Continue
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-4">
+                  <p className="text-white/70 text-sm">
+                    Continue to the next step to set up your campaign.
+                  </p>
+                  <Button
+                    onClick={() => {
+                      setLeadsApproved(true);
+                      setStep(4);
+                    }}
+                    className="w-full sm:w-auto"
+                  >
+                    Continue
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setStep(2)}
+                    className="w-full sm:w-auto"
+                  >
+                    ← Back
+                  </Button>
+                </div>
               )}
-              <div className="mt-6">
-                <Button variant="ghost" size="sm" onClick={() => setStep(1)}>
-                  ← Back
-                </Button>
-              </div>
             </div>
           )}
 
@@ -1127,7 +1374,111 @@ export default function CreateCampaignPage() {
                     Sending account connected
                   </span>
                 </div>
+                {fetchLeadsResult?.campaign_id && (
+                  <div className="pt-3 mt-3 border-t border-white/10">
+                    <div className="flex items-center gap-2 text-sm flex-wrap">
+                      <span
+                        className={
+                          campaignDataFetched
+                            ? "text-emerald-400"
+                            : campaignDataLoading
+                              ? "text-amber-400"
+                              : "text-white/50"
+                        }
+                      >
+                        {campaignDataFetched
+                          ? "✓"
+                          : campaignDataLoading
+                            ? "…"
+                            : "○"}
+                      </span>
+                      <span className="text-white/80">
+                        {campaignDataFetched
+                          ? verifiedLeadsCount != null
+                            ? `Leads loaded (${campaignLeads.length} total, ${verifiedLeadsCount} verified)`
+                            : "Leads loaded"
+                          : "Load leads from database"}
+                      </span>
+                      {!campaignDataFetched && !campaignDataLoading && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={fetchLeadsFromDb}
+                          className="ml-2"
+                        >
+                          Load leads
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
+              {campaignDataFetched &&
+                (campaignLeads.length > 0 || verifiedLeadsCount === 0) && (
+                  <div className="rounded-lg border border-white/10 bg-white/5 p-4 mb-6">
+                    <p className="text-sm font-medium text-white/90 mb-3">
+                      Leads ({campaignLeads.length} total, {verifiedLeadsCount ?? 0} verified)
+                    </p>
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => setLeadsPreviewOpen((prev) => !prev)}
+                      >
+                        {leadsPreviewOpen ? "Hide preview" : "Preview"}
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={downloadLeadsCsv}
+                        disabled={campaignLeads.length === 0}
+                      >
+                        Download CSV
+                      </Button>
+                    </div>
+                    {leadsPreviewOpen && campaignLeads.length > 0 && (
+                      <div className="overflow-x-auto rounded border border-white/10 max-h-64 overflow-y-auto">
+                        <table className="w-full text-sm text-left">
+                          <thead className="bg-white/5 text-white/80 sticky top-0">
+                            <tr>
+                              <th className="px-3 py-2">Name</th>
+                              <th className="px-3 py-2">Email</th>
+                              <th className="px-3 py-2">Status</th>
+                              <th className="px-3 py-2">Position</th>
+                              <th className="px-3 py-2">Company</th>
+                              <th className="px-3 py-2">Country</th>
+                            </tr>
+                          </thead>
+                          <tbody className="text-white/90">
+                            {campaignLeads.map((l) => (
+                              <tr
+                                key={l.id}
+                                className="border-t border-white/10"
+                              >
+                                <td className="px-3 py-1.5">
+                                  {l.full_name ?? "—"}
+                                </td>
+                                <td className="px-3 py-1.5">{l.email}</td>
+                                <td className="px-3 py-1.5">
+                                  {l.email_status}
+                                </td>
+                                <td className="px-3 py-1.5">
+                                  {l.position ?? "—"}
+                                </td>
+                                <td className="px-3 py-1.5">
+                                  {l.org_name ?? "—"}
+                                </td>
+                                <td className="px-3 py-1.5">
+                                  {l.country ?? "—"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
               <div className="flex gap-4">
                 <Button
                   variant="secondary"
@@ -1141,15 +1492,17 @@ export default function CreateCampaignPage() {
                   variant="primary"
                   size="md"
                   onClick={handleSubmit}
-                  disabled={!canLaunch()}
+                  disabled={!isLaunchEnabled()}
                   className="flex-1"
                 >
                   Launch Campaign
                 </Button>
               </div>
-              {!canLaunch() && (
+              {!isLaunchEnabled() && (
                 <p className="mt-2 text-sm text-white/50">
-                  Complete all checklist items to launch.
+                  {fetchLeadsResult?.campaign_id && !campaignDataFetched
+                    ? "Load leads from database to preview and enable launch."
+                    : "Complete all checklist items to launch."}
                 </p>
               )}
             </div>
