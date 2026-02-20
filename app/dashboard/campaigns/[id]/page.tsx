@@ -13,6 +13,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { OutreachBriefForm } from "@/components/dashboard/outreach/OutreachBriefForm";
+import { TemplateEditor } from "@/components/dashboard/outreach/TemplateEditor";
+import { TemplatePreview } from "@/components/dashboard/outreach/TemplatePreview";
+import { ConfirmAndStartBlock } from "@/components/dashboard/outreach/ConfirmAndStartBlock";
 
 type LeadRow = {
   id: string;
@@ -54,6 +58,11 @@ export default function CampaignDetailPage() {
   const [leadsPreviewOpen, setLeadsPreviewOpen] = useState(false);
   const [emailTemplate, setEmailTemplate] = useState(DEFAULT_EMAIL_TEMPLATE);
   const [startCampaignLoading, setStartCampaignLoading] = useState(false);
+  const [icpDescription, setIcpDescription] = useState("");
+  const [offerDescription, setOfferDescription] = useState("");
+  const [yourName, setYourName] = useState("");
+  const [generateTemplateLoading, setGenerateTemplateLoading] = useState(false);
+  const [generateTemplateError, setGenerateTemplateError] = useState<string | null>(null);
 
   useEffect(() => {
     async function loadCampaign() {
@@ -151,11 +160,56 @@ export default function CampaignDetailPage() {
     URL.revokeObjectURL(url);
   };
 
-  const handleStartCampaign = async () => {
+  const handleGenerateTemplate = async () => {
+    setGenerateTemplateError(null);
+    setGenerateTemplateLoading(true);
+    try {
+      const sampleLeads = leads.slice(0, 5).map((l) => ({
+        full_name: l.full_name,
+        position: l.position,
+        org_name: l.org_name,
+        org_description: l.org_description,
+      }));
+      const res = await fetch("/api/generate-outreach-template", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          icpDescription,
+          offerDescription,
+          sampleLeads,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setGenerateTemplateError(data.error ?? "Failed to generate template");
+        return;
+      }
+      if (data.template) setEmailTemplate(data.template);
+    } catch (e) {
+      setGenerateTemplateError(e instanceof Error ? e.message : "Request failed");
+    } finally {
+      setGenerateTemplateLoading(false);
+    }
+  };
+
+  const handleConfirmAndStart = async () => {
+    if (!emailTemplate.trim() || !yourName.trim() || leads.length === 0) return;
     setStartCampaignLoading(true);
-    // Placeholder: in a full implementation this would call an API to start the campaign with the template
-    await new Promise((r) => setTimeout(r, 800));
-    setStartCampaignLoading(false);
+    try {
+      const res = await fetch(`/api/campaigns/${campaignId}/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ template: emailTemplate, yourName: yourName.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        console.error("Send failed:", data.error);
+        return;
+      }
+      // Success: could show toast or redirect
+    } finally {
+      setStartCampaignLoading(false);
+    }
   };
 
   return (
@@ -318,37 +372,65 @@ export default function CampaignDetailPage() {
           )}
         </div>
 
-        {/* Section 3 - Email template + Start campaign */}
-        <div>
-          <h2 className="text-xl font-semibold text-white mb-4">
-            Email template
+        {/* Section 3 - Cold outreach: ICP & offer → Generate → Edit → Preview → Confirm */}
+        <div className="space-y-10">
+          <h2 className="text-xl font-semibold text-white">
+            Cold outreach
           </h2>
-          <p className="text-white/60 text-sm mb-2">
-            Customize your outreach. Use placeholders:{" "}
-            <span className="text-[#93c5fd] font-mono">{`{{firstName}}`}</span>,{" "}
-            <span className="text-[#93c5fd] font-mono">{`{{yourName}}`}</span>,{" "}
-            <span className="text-[#93c5fd] font-mono">{`{{org_name}}`}</span>.
-          </p>
-          <div className="rounded-lg border border-white/10 bg-white/5 p-4 mb-4">
-            <label className="block text-sm font-medium text-white/80 mb-2">
-              AI Generated Email Template
-            </label>
-            <textarea
-              value={emailTemplate}
-              onChange={(e) => setEmailTemplate(e.target.value)}
-              rows={12}
-              className="w-full rounded-lg border border-white/10 bg-[#0f1419] px-4 py-3 text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:border-transparent resize-y min-h-[200px]"
-              placeholder="Hi {{firstName}}, ..."
+
+          <div className="rounded-lg border border-white/10 bg-white/5 p-6">
+            <h3 className="text-lg font-medium text-white mb-4">1. Describe problems & your solution</h3>
+            <OutreachBriefForm
+              icpDescription={icpDescription}
+              offerDescription={offerDescription}
+              onIcpChange={setIcpDescription}
+              onOfferChange={setOfferDescription}
+            />
+            <div className="mt-4">
+              <Button
+                variant="primary"
+                size="md"
+                onClick={handleGenerateTemplate}
+                disabled={generateTemplateLoading || leads.length === 0}
+              >
+                {generateTemplateLoading ? "Generating…" : "Generate template"}
+              </Button>
+              {generateTemplateError && (
+                <p className="mt-2 text-sm text-red-400" role="alert">
+                  {generateTemplateError}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-white/10 bg-white/5 p-6">
+            <h3 className="text-lg font-medium text-white mb-4">2. Edit template & preview</h3>
+            <div className="mb-4">
+              <TemplateEditor
+                value={emailTemplate}
+                onChange={setEmailTemplate}
+              />
+            </div>
+            <div className="mt-4">
+              <TemplatePreview
+                template={emailTemplate}
+                sampleLead={leads[0] ?? null}
+                yourName={yourName}
+              />
+            </div>
+          </div>
+
+          <div>
+            <h3 className="text-lg font-medium text-white mb-4">3. Confirm and start</h3>
+            <ConfirmAndStartBlock
+              yourName={yourName}
+              onYourNameChange={setYourName}
+              leadCount={leads.length}
+              onConfirmAndStart={handleConfirmAndStart}
+              loading={startCampaignLoading}
+              disabled={leads.length === 0}
             />
           </div>
-          <Button
-            variant="primary"
-            size="md"
-            onClick={handleStartCampaign}
-            disabled={startCampaignLoading || leads.length === 0}
-          >
-            {startCampaignLoading ? "Starting…" : "Start campaign"}
-          </Button>
         </div>
       </div>
     </div>
