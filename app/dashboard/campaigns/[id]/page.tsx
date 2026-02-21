@@ -221,6 +221,7 @@ export default function CampaignDetailPage() {
     try {
       const res = await fetch(`/api/campaigns/${campaignId}/send`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           template: emailTemplate,

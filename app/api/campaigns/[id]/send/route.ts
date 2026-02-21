@@ -19,14 +19,18 @@ export async function POST(
 ) {
   try {
     const supabase = await createClient();
+    // Use getSession() so we read the session from cookies without a network call to Supabase Auth.
+    // getUser() can time out (Connect Timeout) when the server cannot reach Supabase Auth.
     const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser();
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession();
 
-    if (authError || !user) {
+    if (sessionError || !session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const user = session.user;
 
     const { id: campaignId } = await params;
     if (!campaignId) {
@@ -171,9 +175,20 @@ export async function POST(
     });
   } catch (e) {
     console.error("campaigns send error:", e);
+    const isNetworkError =
+      e instanceof Error &&
+      ("cause" in e &&
+        e.cause instanceof Error &&
+        (e.cause.message?.includes("timeout") ||
+          (e.cause as { code?: string }).code === "UND_ERR_CONNECT_TIMEOUT"));
+    const message = isNetworkError
+      ? "Could not reach the server. Check your network and try again."
+      : e instanceof Error
+        ? e.message
+        : "Send failed";
     return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Send failed" },
-      { status: 500 }
+      { error: message },
+      { status: isNetworkError ? 503 : 500 }
     );
   }
 }
