@@ -17,6 +17,8 @@ import { OutreachBriefForm } from "@/components/dashboard/outreach/OutreachBrief
 import { TemplateEditor } from "@/components/dashboard/outreach/TemplateEditor";
 import { TemplatePreview } from "@/components/dashboard/outreach/TemplatePreview";
 import { ConfirmAndStartBlock } from "@/components/dashboard/outreach/ConfirmAndStartBlock";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 type LeadRow = {
   id: string;
@@ -31,6 +33,8 @@ type LeadRow = {
   org_website: string | null;
   created_at: string;
 };
+
+const DEFAULT_SUBJECT = "Quick question – {{firstName}}";
 
 const DEFAULT_EMAIL_TEMPLATE = `Hi {{firstName}},
 
@@ -61,8 +65,12 @@ export default function CampaignDetailPage() {
   const [icpDescription, setIcpDescription] = useState("");
   const [offerDescription, setOfferDescription] = useState("");
   const [yourName, setYourName] = useState("");
+  const [subjectTemplate, setSubjectTemplate] = useState(DEFAULT_SUBJECT);
   const [generateTemplateLoading, setGenerateTemplateLoading] = useState(false);
   const [generateTemplateError, setGenerateTemplateError] = useState<string | null>(null);
+  const [emailConfigConfigured, setEmailConfigConfigured] = useState<boolean | null>(null);
+  const [emailConfigFrom, setEmailConfigFrom] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
 
   useEffect(() => {
     async function loadCampaign() {
@@ -115,6 +123,20 @@ export default function CampaignDetailPage() {
     }
     loadLeads();
   }, [campaignId]);
+
+  useEffect(() => {
+    async function loadEmailConfig() {
+      try {
+        const res = await fetch("/api/settings/email");
+        const data = await res.json();
+        setEmailConfigConfigured(data.configured === true);
+        if (data.config?.from_email) setEmailConfigFrom(data.config.from_email);
+      } catch {
+        setEmailConfigConfigured(false);
+      }
+    }
+    loadEmailConfig();
+  }, []);
 
   const downloadCsv = () => {
     if (leads.length === 0) return;
@@ -194,19 +216,23 @@ export default function CampaignDetailPage() {
 
   const handleConfirmAndStart = async () => {
     if (!emailTemplate.trim() || !yourName.trim() || leads.length === 0) return;
+    setSendError(null);
     setStartCampaignLoading(true);
     try {
       const res = await fetch(`/api/campaigns/${campaignId}/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ template: emailTemplate, yourName: yourName.trim() }),
+        body: JSON.stringify({
+          template: emailTemplate,
+          subject: subjectTemplate.trim() || DEFAULT_SUBJECT,
+          yourName: yourName.trim(),
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
-        console.error("Send failed:", data.error);
+        setSendError(data.error ?? "Send failed");
         return;
       }
-      // Success: could show toast or redirect
     } finally {
       setStartCampaignLoading(false);
     }
@@ -406,6 +432,14 @@ export default function CampaignDetailPage() {
           <div className="rounded-lg border border-white/10 bg-white/5 p-6">
             <h3 className="text-lg font-medium text-white mb-4">2. Edit template & preview</h3>
             <div className="mb-4">
+              <Label className="text-white/90 mb-1.5 block">Email subject</Label>
+              <Input
+                value={subjectTemplate}
+                onChange={(e) => setSubjectTemplate(e.target.value)}
+                placeholder="e.g. Quick idea for {{org_name}}"
+                className="mb-4"
+              />
+              <Label className="text-white/90 mb-1.5 block">Email body (template)</Label>
               <TemplateEditor
                 value={emailTemplate}
                 onChange={setEmailTemplate}
@@ -422,14 +456,38 @@ export default function CampaignDetailPage() {
 
           <div>
             <h3 className="text-lg font-medium text-white mb-4">3. Confirm and start</h3>
-            <ConfirmAndStartBlock
-              yourName={yourName}
-              onYourNameChange={setYourName}
-              leadCount={leads.length}
-              onConfirmAndStart={handleConfirmAndStart}
-              loading={startCampaignLoading}
-              disabled={leads.length === 0}
-            />
+            {emailConfigConfigured === null ? (
+              <p className="text-white/60 text-sm">Checking email config…</p>
+            ) : !emailConfigConfigured ? (
+              <div className="rounded-lg border border-white/10 bg-white/5 p-6">
+                <p className="text-white/90 mb-2">
+                  Connect your email to send campaigns from your address.
+                </p>
+                <p className="text-white/60 text-sm mb-4">
+                  Set up SMTP (and optional IMAP) on the Mail Config Settings page, then return here to start the campaign.
+                </p>
+                <Link href="/dashboard/mail-config-settings">
+                  <Button variant="primary" size="md">Set up email</Button>
+                </Link>
+              </div>
+            ) : (
+              <>
+                {emailConfigFrom && (
+                  <p className="text-white/60 text-sm mb-2">Sending as: {emailConfigFrom}</p>
+                )}
+                {sendError && (
+                  <p className="text-red-400 text-sm mb-2" role="alert">{sendError}</p>
+                )}
+                <ConfirmAndStartBlock
+                  yourName={yourName}
+                  onYourNameChange={setYourName}
+                  leadCount={leads.length}
+                  onConfirmAndStart={handleConfirmAndStart}
+                  loading={startCampaignLoading}
+                  disabled={leads.length === 0}
+                />
+              </>
+            )}
           </div>
         </div>
       </div>

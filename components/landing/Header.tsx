@@ -121,6 +121,7 @@ export function Header() {
             {user ? (
               <>
                 <Link href="/dashboard/profile" className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>Profile</Link>
+                <Link href="/dashboard/mail-config-settings" className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>Mail Config Settings</Link>
                 <Link href="/dashboard/payment-history" className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>Payment History</Link>
                 <Link href="/auth/signout" className="block text-white/90 hover:text-white py-1" onClick={() => setMobileOpen(false)}>Log Out</Link>
               </>
