@@ -50,7 +50,7 @@ export function ConfirmAndStartBlock({
         onClick={onConfirmAndStart}
         disabled={!canStart}
       >
-        {loading ? "Starting…" : "Confirm and Start Campaign"}
+        {loading ? "Sending…" : "Confirm and Start Campaign"}
       </Button>
     </div>
   );

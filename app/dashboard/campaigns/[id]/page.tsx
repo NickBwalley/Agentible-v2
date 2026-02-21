@@ -68,9 +68,9 @@ export default function CampaignDetailPage() {
   const [subjectTemplate, setSubjectTemplate] = useState(DEFAULT_SUBJECT);
   const [generateTemplateLoading, setGenerateTemplateLoading] = useState(false);
   const [generateTemplateError, setGenerateTemplateError] = useState<string | null>(null);
-  const [emailConfigConfigured, setEmailConfigConfigured] = useState<boolean | null>(null);
-  const [emailConfigFrom, setEmailConfigFrom] = useState<string | null>(null);
+  const [sendPhase, setSendPhase] = useState<"idle" | "sending" | "success" | "error" | "timeout">("idle");
   const [sendError, setSendError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
     async function loadCampaign() {
@@ -123,20 +123,6 @@ export default function CampaignDetailPage() {
     }
     loadLeads();
   }, [campaignId]);
-
-  useEffect(() => {
-    async function loadEmailConfig() {
-      try {
-        const res = await fetch("/api/settings/email");
-        const data = await res.json();
-        setEmailConfigConfigured(data.configured === true);
-        if (data.config?.from_email) setEmailConfigFrom(data.config.from_email);
-      } catch {
-        setEmailConfigConfigured(false);
-      }
-    }
-    loadEmailConfig();
-  }, []);
 
   const downloadCsv = () => {
     if (leads.length === 0) return;
@@ -206,6 +192,7 @@ export default function CampaignDetailPage() {
         setGenerateTemplateError(data.error ?? "Failed to generate template");
         return;
       }
+      if (data.subject != null && String(data.subject).trim()) setSubjectTemplate(String(data.subject).trim());
       if (data.template) setEmailTemplate(data.template);
     } catch (e) {
       setGenerateTemplateError(e instanceof Error ? e.message : "Request failed");
@@ -214,10 +201,18 @@ export default function CampaignDetailPage() {
     }
   };
 
+  const SEND_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
   const handleConfirmAndStart = async () => {
     if (!emailTemplate.trim() || !yourName.trim() || leads.length === 0) return;
     setSendError(null);
+    setSuccessMessage(null);
+    setSendPhase("sending");
     setStartCampaignLoading(true);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
+
     try {
       const res = await fetch(`/api/campaigns/${campaignId}/send`, {
         method: "POST",
@@ -228,11 +223,26 @@ export default function CampaignDetailPage() {
           subject: subjectTemplate.trim() || DEFAULT_SUBJECT,
           yourName: yourName.trim(),
         }),
+        signal: controller.signal,
       });
       const data = await res.json();
+      clearTimeout(timeoutId);
       if (!res.ok) {
-        setSendError(data.error ?? "Send failed");
+        setSendPhase("error");
+        setSendError(data.error ?? "Sending failed. Please try again later and if it persists contact support.");
         return;
+      }
+      setSendPhase("success");
+      setSuccessMessage(data.message ?? "Successfully sent cold outreach emails. Check your dashboard for real metrics on deliverability.");
+    } catch (e) {
+      clearTimeout(timeoutId);
+      const isAbort = e instanceof Error && e.name === "AbortError";
+      if (isAbort) {
+        setSendPhase("timeout");
+        setSendError(null);
+      } else {
+        setSendPhase("error");
+        setSendError("Sending failed. Please try again later and if it persists contact support.");
       }
     } finally {
       setStartCampaignLoading(false);
@@ -457,38 +467,41 @@ export default function CampaignDetailPage() {
 
           <div>
             <h3 className="text-lg font-medium text-white mb-4">3. Confirm and start</h3>
-            {emailConfigConfigured === null ? (
-              <p className="text-white/60 text-sm">Checking email config…</p>
-            ) : !emailConfigConfigured ? (
-              <div className="rounded-lg border border-white/10 bg-white/5 p-6">
-                <p className="text-white/90 mb-2">
-                  Connect your email to send campaigns from your address.
-                </p>
-                <p className="text-white/60 text-sm mb-4">
-                  Set up SMTP (and optional IMAP) on the Mail Config Settings page, then return here to start the campaign.
-                </p>
-                <Link href="/dashboard/mail-config-settings">
-                  <Button variant="primary" size="md">Set up email</Button>
-                </Link>
-              </div>
-            ) : (
-              <>
-                {emailConfigFrom && (
-                  <p className="text-white/60 text-sm mb-2">Sending as: {emailConfigFrom}</p>
-                )}
-                {sendError && (
-                  <p className="text-red-400 text-sm mb-2" role="alert">{sendError}</p>
-                )}
-                <ConfirmAndStartBlock
-                  yourName={yourName}
-                  onYourNameChange={setYourName}
-                  leadCount={leads.length}
-                  onConfirmAndStart={handleConfirmAndStart}
-                  loading={startCampaignLoading}
-                  disabled={leads.length === 0}
-                />
-              </>
+            {sendPhase === "sending" && (
+              <p className="text-white/90 text-sm mb-2">Sending outreach messages......</p>
             )}
+            {sendPhase === "sending" && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 mb-4">
+                <p className="text-amber-200 text-sm">
+                  Please hold on as we send your cold outreach emails to the recipients (approx 2–3 min). We&apos;ll give you a response as soon as it&apos;s complete.
+                </p>
+              </div>
+            )}
+            {sendPhase === "success" && successMessage && (
+              <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4 mb-4">
+                <p className="text-emerald-200 text-sm">{successMessage}</p>
+              </div>
+            )}
+            {sendPhase === "error" && sendError && (
+              <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 mb-4">
+                <p className="text-red-200 text-sm" role="alert">{sendError}</p>
+              </div>
+            )}
+            {sendPhase === "timeout" && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 mb-4">
+                <p className="text-amber-200 text-sm">
+                  This is taking longer than usual. Check your dashboard in a few minutes.
+                </p>
+              </div>
+            )}
+            <ConfirmAndStartBlock
+              yourName={yourName}
+              onYourNameChange={setYourName}
+              leadCount={leads.length}
+              onConfirmAndStart={handleConfirmAndStart}
+              loading={startCampaignLoading}
+              disabled={leads.length === 0}
+            />
           </div>
         </div>
       </div>
