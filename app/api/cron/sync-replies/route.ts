@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
-import { syncRepliesForAllUsers } from "@/lib/inbound/sync-replies";
+import { syncRepliesForAllUsers } from "./syncReplies";
+
+export const runtime = "nodejs";
 
 /**
  * Cron endpoint to sync inbound replies from users' IMAP mailboxes into outreach_messages.

@@ -131,7 +131,7 @@ export default function OnboardingPage() {
           {step === 1 && (
             <div className="space-y-4">
               <Button
-                variant="outline"
+                variant="secondary"
                 className="w-full h-20 justify-start text-left border-white/20 bg-white/5 text-white hover:bg-white/10"
                 onClick={() => handleCRMConnect("hubspot")}
                 disabled={loading}
@@ -144,7 +144,7 @@ export default function OnboardingPage() {
                 </div>
               </Button>
               <Button
-                variant="outline"
+                variant="secondary"
                 className="w-full h-20 justify-start text-left border-white/20 bg-white/5 text-white hover:bg-white/10"
                 onClick={() => handleCRMConnect("salesforce")}
                 disabled={loading}
@@ -157,7 +157,7 @@ export default function OnboardingPage() {
                 </div>
               </Button>
               <Button
-                variant="outline"
+                variant="secondary"
                 className="w-full h-20 justify-start text-left border-white/20 bg-white/5 text-white hover:bg-white/10"
                 onClick={() => handleCRMConnect("google_drive")}
                 disabled={loading}
@@ -220,7 +220,7 @@ export default function OnboardingPage() {
                 <Label className="text-white/90">Do you want automatic lead assignment?</Label>
                 <div className="space-y-2">
                   <Button
-                    variant={routingEnabled ? "primary" : "outline"}
+                    variant={routingEnabled ? "primary" : "secondary"}
                     className={`w-full justify-start text-left h-auto py-4 ${!routingEnabled ? "border-white/20 bg-white/5 text-white hover:bg-white/10" : ""}`}
                     onClick={() => setRoutingEnabled(true)}
                   >
@@ -232,7 +232,7 @@ export default function OnboardingPage() {
                     </div>
                   </Button>
                   <Button
-                    variant={!routingEnabled ? "primary" : "outline"}
+                    variant={!routingEnabled ? "primary" : "secondary"}
                     className={`w-full justify-start text-left h-auto py-4 ${routingEnabled ? "border-white/20 bg-white/5 text-white hover:bg-white/10" : ""}`}
                     onClick={() => setRoutingEnabled(false)}
                   >
