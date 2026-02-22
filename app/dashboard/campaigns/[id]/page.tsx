@@ -19,9 +19,11 @@ import { TemplatePreview } from "@/components/dashboard/outreach/TemplatePreview
 import { ConfirmAndStartBlock } from "@/components/dashboard/outreach/ConfirmAndStartBlock";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Star } from "lucide-react";
 
 type LeadRow = {
   id: string;
+  lead_batch_id: string | null;
   full_name: string | null;
   email: string;
   email_status: string;
@@ -72,6 +74,12 @@ export default function CampaignDetailPage() {
   const [sendError, setSendError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [campaignAlreadySent, setCampaignAlreadySent] = useState(false);
+  const [templateGeneratedOnce, setTemplateGeneratedOnce] = useState(false);
+  const [saveBriefLoading, setSaveBriefLoading] = useState(false);
+  const [saveTemplateLoading, setSaveTemplateLoading] = useState(false);
+  const [saveBriefMessage, setSaveBriefMessage] = useState<string | null>(null);
+  const [saveTemplateMessage, setSaveTemplateMessage] = useState<string | null>(null);
+  const [outreachLoadDone, setOutreachLoadDone] = useState(false);
 
   useEffect(() => {
     async function loadCampaign() {
@@ -93,13 +101,14 @@ export default function CampaignDetailPage() {
       const { data: leadsData } = await supabase
         .from("leads")
         .select(
-          "id, full_name, email, email_status, linkedin_url, position, country, org_name, org_description, org_website, created_at"
+          "id, lead_batch_id, full_name, email, email_status, linkedin_url, position, country, org_name, org_description, org_website, created_at"
         )
         .eq("campaign_id", campaignId)
         .order("created_at", { ascending: false });
 
       const rows: LeadRow[] = (leadsData ?? []).map((l) => ({
         id: l.id,
+        lead_batch_id: l.lead_batch_id ?? null,
         full_name: l.full_name ?? null,
         email: l.email ?? "",
         email_status: l.email_status ?? "unknown",
@@ -229,10 +238,104 @@ export default function CampaignDetailPage() {
       }
       if (data.subject != null && String(data.subject).trim()) setSubjectTemplate(String(data.subject).trim());
       if (data.template) setEmailTemplate(data.template);
+      setTemplateGeneratedOnce(true);
     } catch (e) {
       setGenerateTemplateError(e instanceof Error ? e.message : "Request failed");
     } finally {
       setGenerateTemplateLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!campaignId || outreachLoadDone) return;
+    async function loadSavedOutreach() {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data } = await supabase
+        .from("campaign_outreach_saves")
+        .select("icp_description, offer_description, subject_template, body_template")
+        .eq("campaign_id", campaignId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (data) {
+        if (data.icp_description != null) setIcpDescription(data.icp_description);
+        if (data.offer_description != null) setOfferDescription(data.offer_description);
+        if (data.subject_template != null && data.subject_template.trim()) setSubjectTemplate(data.subject_template.trim());
+        if (data.body_template != null) setEmailTemplate(data.body_template);
+      }
+      setOutreachLoadDone(true);
+    }
+    loadSavedOutreach();
+  }, [campaignId, outreachLoadDone]);
+
+  const handleSaveBrief = async () => {
+    setSaveBriefMessage(null);
+    setSaveBriefLoading(true);
+    try {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setSaveBriefMessage("You must be signed in to save.");
+        return;
+      }
+      const leadBatchId = leads[0]?.lead_batch_id ?? null;
+      const { error } = await supabase
+        .from("campaign_outreach_saves")
+        .upsert(
+          {
+            user_id: user.id,
+            campaign_id: campaignId,
+            lead_batch_id: leadBatchId,
+            icp_description: icpDescription,
+            offer_description: offerDescription,
+            subject_template: subjectTemplate,
+            body_template: emailTemplate,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "user_id,campaign_id" }
+        );
+      if (error) throw error;
+      setSaveBriefMessage("Brief saved.");
+    } catch (e) {
+      setSaveBriefMessage(e instanceof Error ? e.message : "Failed to save brief.");
+    } finally {
+      setSaveBriefLoading(false);
+    }
+  };
+
+  const handleSaveTemplate = async () => {
+    setSaveTemplateMessage(null);
+    setSaveTemplateLoading(true);
+    try {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setSaveTemplateMessage("You must be signed in to save.");
+        return;
+      }
+      const leadBatchId = leads[0]?.lead_batch_id ?? null;
+      const { error } = await supabase
+        .from("campaign_outreach_saves")
+        .upsert(
+          {
+            user_id: user.id,
+            campaign_id: campaignId,
+            lead_batch_id: leadBatchId,
+            icp_description: icpDescription,
+            offer_description: offerDescription,
+            subject_template: subjectTemplate,
+            body_template: emailTemplate,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "user_id,campaign_id" }
+        );
+      if (error) throw error;
+      setSaveTemplateMessage("Template saved.");
+    } catch (e) {
+      setSaveTemplateMessage(e instanceof Error ? e.message : "Failed to save template.");
+    } finally {
+      setSaveTemplateLoading(false);
     }
   };
 
@@ -473,17 +576,42 @@ export default function CampaignDetailPage() {
               onIcpChange={setIcpDescription}
               onOfferChange={setOfferDescription}
             />
-            <div className="mt-4">
+            <div className="mt-4 flex flex-wrap items-center gap-3">
               <Button
                 variant="primary"
                 size="md"
                 onClick={handleGenerateTemplate}
                 disabled={generateTemplateLoading || leads.length === 0}
+                className={
+                  templateGeneratedOnce
+                    ? "!bg-[#7c3aed] hover:!bg-[#6d28d9] !shadow-[0_0_15px_rgba(124,58,237,0.35)] hover:!shadow-[0_0_20px_rgba(124,58,237,0.45)]"
+                    : ""
+                }
               >
-                {generateTemplateLoading ? "Generating…" : "Generate template"}
+                {generateTemplateLoading ? (
+                  "Generating…"
+                ) : templateGeneratedOnce ? (
+                  "Regenerate using AI"
+                ) : (
+                  <>
+                    <Star className="w-4 h-4 mr-1.5 inline-block fill-current" aria-hidden />
+                    Generate template using AI
+                  </>
+                )}
               </Button>
+              <Button
+                variant="secondary"
+                size="md"
+                onClick={handleSaveBrief}
+                disabled={saveBriefLoading}
+              >
+                {saveBriefLoading ? "Saving…" : "Save brief"}
+              </Button>
+              {saveBriefMessage && (
+                <span className="text-sm text-white/70">{saveBriefMessage}</span>
+              )}
               {generateTemplateError && (
-                <p className="mt-2 text-sm text-red-400" role="alert">
+                <p className="mt-2 w-full text-sm text-red-400" role="alert">
                   {generateTemplateError}
                 </p>
               )}
@@ -512,6 +640,19 @@ export default function CampaignDetailPage() {
                 sampleLead={leads[0] ?? null}
                 yourName={yourName}
               />
+            </div>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <Button
+                variant="secondary"
+                size="md"
+                onClick={handleSaveTemplate}
+                disabled={saveTemplateLoading}
+              >
+                {saveTemplateLoading ? "Saving…" : "Save template"}
+              </Button>
+              {saveTemplateMessage && (
+                <span className="text-sm text-white/70">{saveTemplateMessage}</span>
+              )}
             </div>
           </div>
 
@@ -546,11 +687,25 @@ export default function CampaignDetailPage() {
             )}
             {showAlreadySentUI ? (
               <div className="rounded-lg border border-white/10 bg-white/5 p-4 space-y-4">
+                <div>
+                  <Label htmlFor="resend-yourName" className="block text-white/90 mb-2">
+                    Your name (required to resend)
+                  </Label>
+                  <Input
+                    id="resend-yourName"
+                    type="text"
+                    value={yourName}
+                    onChange={(e) => setYourName(e.target.value)}
+                    disabled={startCampaignLoading}
+                    placeholder="e.g. Jane Smith"
+                    className="w-full max-w-xs mb-4"
+                  />
+                </div>
                 <Button
                   variant="primary"
                   size="md"
                   onClick={handleResendCampaign}
-                  disabled={startCampaignLoading || leads.length === 0}
+                  disabled={startCampaignLoading || leads.length === 0 || !yourName.trim()}
                   className="!bg-[#7c3aed] hover:!bg-[#6d28d9] !shadow-[0_0_15px_rgba(124,58,237,0.35)] hover:!shadow-[0_0_20px_rgba(124,58,237,0.45)]"
                 >
                   {startCampaignLoading ? "Sending…" : "Resend Campaign"}
