@@ -198,7 +198,13 @@ export async function POST(
         .insert(rows);
 
       if (insertError) {
-        console.error("campaign_send_results insert error:", insertError);
+        console.error("campaign_send_results insert error:", {
+          message: insertError.message,
+          code: insertError.code,
+          details: insertError.details,
+          campaignId,
+          rowCount: rows.length,
+        });
       }
     }
 

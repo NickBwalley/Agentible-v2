@@ -25,10 +25,10 @@ export type Campaign = {
   id: string;
   name: string;
   status: CampaignStatusDisplay;
-  numProspects: number;
-  opened: number;
+  totalLeads: number;
+  sent: number;
+  notSent: number;
   notOpened: number;
-  meetings: number;
   lastActivity: string;
 };
 
@@ -127,12 +127,12 @@ export function CampaignsTable({ campaigns, onCampaignDeleted }: CampaignsTableP
           <TableRow className="border-white/10">
             <TableHead className="text-white/70">Campaign Name</TableHead>
             <TableHead className="text-white/70">Status</TableHead>
-            <TableHead className="text-white/70">No of prospects</TableHead>
-            <TableHead className="text-white/70">Opened</TableHead>
-            <TableHead className="text-white/70">Not opened</TableHead>
-            <TableHead className="text-white/70">Meetings</TableHead>
+            <TableHead className="text-white/70">Total Leads</TableHead>
+            <TableHead className="text-white/70">Sent</TableHead>
+            <TableHead className="text-white/70">Not Sent</TableHead>
+            <TableHead className="text-white/70">Not Opened</TableHead>
             <TableHead className="text-white/70">Last Activity</TableHead>
-            <TableHead className="text-white/70"></TableHead>
+            <TableHead className="text-white/70">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -155,10 +155,10 @@ export function CampaignsTable({ campaigns, onCampaignDeleted }: CampaignsTableP
                     {campaign.status.charAt(0).toUpperCase() + campaign.status.slice(1)}
                   </span>
                 </TableCell>
-                <TableCell className="text-white/90">{campaign.numProspects.toLocaleString()}</TableCell>
-                <TableCell className="text-white/90">{campaign.opened.toLocaleString()}</TableCell>
+                <TableCell className="text-white/90">{campaign.totalLeads.toLocaleString()}</TableCell>
+                <TableCell className="text-white/90">{campaign.sent.toLocaleString()}</TableCell>
+                <TableCell className="text-white/90">{campaign.notSent.toLocaleString()}</TableCell>
                 <TableCell className="text-white/90">{campaign.notOpened.toLocaleString()}</TableCell>
-                <TableCell className="text-white/90">{campaign.meetings.toLocaleString()}</TableCell>
                 <TableCell className="text-white/60 text-sm">{campaign.lastActivity}</TableCell>
                 <TableCell className="flex items-center gap-2">
                   <Link href={`/dashboard/campaigns/${campaign.id}`}>
