@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { fillTemplate, getFirstNameFromFullName } from "@/lib/outreach";
+import { decryptCiphertext } from "@/lib/credentials";
+import nodemailer from "nodemailer";
 
 type Body = {
   template: string;
@@ -8,39 +10,18 @@ type Body = {
   yourName: string;
 };
 
-/**
- * Webhook must return array of { accepted: string[], rejected: string[] } per message/batch.
- * In n8n, set the "Respond to Webhook" node's Response Body to the actual email result.
- * Recommended: use {{ $json }} so the whole object (with accepted/rejected arrays) is returned.
- * If you build the body manually, ensure accepted/rejected are arrays, not stringified arrays.
- */
-type WebhookResultItem = {
-  accepted?: string[] | string;
-  rejected?: string[] | string;
-};
+const SEND_DELAY_MS = 200;
+const SEND_TIMEOUT_MS = 15000;
+const MESSAGE_ID_DOMAIN = "outreach.agentible.dev";
 
-/** Normalize n8n output: accepted/rejected can be arrays or JSON-stringified arrays. */
-function toEmailArray(v: unknown): string[] {
-  if (Array.isArray(v))
-    return v.filter((e): e is string => typeof e === "string");
-  if (typeof v === "string") {
-    const trimmed = v.trim();
-    if (!trimmed) return [];
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      return Array.isArray(parsed)
-        ? parsed.filter((e): e is string => typeof e === "string")
-        : [];
-    } catch {
-      return [];
-    }
-  }
-  return [];
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const SEND_MAIL_WEBHOOK_URL =
-  process.env.SEND_MAIL_WEBHOOK_URL ||
-  "https://n8n.srv1036993.hstgr.cloud/webhook/agentible-send-coldoutreach-emails";
+function generateMessageId(campaignId: string, leadId: string): string {
+  const part = `${campaignId}-${leadId}-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+  return `<${part}@${MESSAGE_ID_DOMAIN}>`;
+}
 
 export async function POST(
   request: Request,
@@ -49,15 +30,13 @@ export async function POST(
   try {
     const supabase = await createClient();
     const {
-      data: { session },
-      error: sessionError,
-    } = await supabase.auth.getSession();
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
 
-    if (sessionError || !session?.user) {
+    if (authError || !user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-
-    const user = session.user;
     const { id: campaignId } = await params;
     if (!campaignId) {
       return NextResponse.json(
@@ -100,6 +79,40 @@ export async function POST(
       );
     }
 
+    const { data: emailConfig, error: configError } = await supabase
+      .from("user_email_config")
+      .select(
+        "smtp_host, smtp_port, smtp_secure, smtp_user, smtp_password_encrypted, from_email",
+      )
+      .eq("user_id", campaign.user_id)
+      .maybeSingle();
+
+    if (
+      configError ||
+      !emailConfig?.smtp_host?.trim() ||
+      !emailConfig?.smtp_user?.trim() ||
+      !emailConfig?.smtp_password_encrypted?.trim()
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "SMTP not configured. You need to set up your SMTP to send campaigns.",
+          code: "smtp_not_configured",
+        },
+        { status: 400 },
+      );
+    }
+
+    let smtpPassword: string;
+    try {
+      smtpPassword = decryptCiphertext(emailConfig.smtp_password_encrypted);
+    } catch {
+      return NextResponse.json(
+        { error: "Could not read SMTP credentials. Re-save your Mail Config." },
+        { status: 500 },
+      );
+    }
+
     const { data: leads, error: leadsError } = await supabase
       .from("leads")
       .select("id, email, full_name, org_name")
@@ -134,79 +147,55 @@ export async function POST(
       };
     });
 
-    const webhookBody = {
-      prospects,
-      fromEmail: process.env.FROM_EMAIL ?? "nick@agentible.dev",
-    };
+    const fromAddress =
+      yourName.trim() && emailConfig.from_email
+        ? `"${yourName.trim()}" <${emailConfig.from_email.trim()}>`
+        : (emailConfig.from_email ?? emailConfig.smtp_user).trim();
 
-    const webhookRes = await fetch(SEND_MAIL_WEBHOOK_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(webhookBody),
+    const transporter = nodemailer.createTransport({
+      host: emailConfig.smtp_host.trim(),
+      port: Number(emailConfig.smtp_port) || 587,
+      secure: Boolean(emailConfig.smtp_secure),
+      auth: {
+        user: emailConfig.smtp_user.trim(),
+        pass: smtpPassword,
+      },
     });
 
-    const responseText = (await webhookRes.text()).trim();
-    if (!webhookRes.ok) {
-      console.error(
-        "n8n webhook error:",
-        webhookRes.status,
-        responseText.slice(0, 500),
-      );
-      return NextResponse.json(
-        {
-          error:
-            "Sending failed. Please try again later and if it persists contact support.",
-        },
-        { status: 502 },
-      );
-    }
+    const accepted: string[] = [];
+    const rejected: string[] = [];
+    const sentMessageIds = new Map<string, string>();
 
-    let items: WebhookResultItem[];
-    if (!responseText) {
-      items = [];
-    } else {
+    for (let i = 0; i < prospects.length; i++) {
+      const p = prospects[i];
+      const messageId = generateMessageId(campaignId, p.leadId);
       try {
-        const parsed = JSON.parse(responseText) as
-          | WebhookResultItem
-          | WebhookResultItem[];
-        items = Array.isArray(parsed) ? parsed : [parsed];
-      } catch (parseErr) {
-        console.error(
-          "webhook response not JSON:",
-          responseText.slice(0, 500),
-          parseErr,
-        );
-        return NextResponse.json(
-          {
-            error:
-              "Sending failed. Please try again later and if it persists contact support.",
-          },
-          { status: 502 },
-        );
+        await Promise.race([
+          transporter.sendMail({
+            from: fromAddress,
+            to: p.email,
+            subject: p.subject,
+            text: p.body,
+            headers: {
+              "Message-ID": messageId,
+            },
+          }),
+          new Promise<never>((_, rej) =>
+            setTimeout(() => rej(new Error("Send timeout")), SEND_TIMEOUT_MS),
+          ),
+        ]);
+        accepted.push(p.email.toLowerCase());
+        sentMessageIds.set(p.leadId, messageId);
+      } catch (err) {
+        console.error("Send error for", p.email, err);
+        rejected.push(p.email.toLowerCase());
+      }
+      if (i < prospects.length - 1) {
+        await sleep(SEND_DELAY_MS);
       }
     }
 
-    const acceptedSet = new Set(
-      items.flatMap((i) =>
-        toEmailArray(i.accepted).map((e) => e.toLowerCase()),
-      ),
-    );
-    const rejectedSet = new Set(
-      items.flatMap((i) =>
-        toEmailArray(i.rejected).map((e) => e.toLowerCase()),
-      ),
-    );
-
-    // Detect when n8n didn't return real result data (e.g. Respond to Webhook uses static body)
-    const hasResultData =
-      items.some(
-        (i) =>
-          toEmailArray(i.accepted).length > 0 ||
-          toEmailArray(i.rejected).length > 0,
-      ) ||
-      acceptedSet.size > 0 ||
-      rejectedSet.size > 0;
-
+    const acceptedSet = new Set(accepted);
     const rows = prospects.map((p) => {
       const emailLower = p.email.toLowerCase();
       const status = acceptedSet.has(emailLower) ? "sent" : "not-sent";
@@ -225,16 +214,37 @@ export async function POST(
       if (insertError) {
         console.error("campaign_send_results insert error:", {
           message: insertError.message,
-          code: insertError.code,
-          details: insertError.details,
           campaignId,
-          rowCount: rows.length,
         });
       }
     }
 
     const sentCount = rows.filter((r) => r.status === "sent").length;
-    const notSentCount = rows.length - sentCount;
+    const outreachRows = prospects
+      .filter((p) => acceptedSet.has(p.email.toLowerCase()))
+      .map((p) => ({
+        user_id: campaign.user_id,
+        campaign_id: campaignId,
+        lead_id: p.leadId,
+        direction: "outbound" as const,
+        subject: p.subject,
+        body_plain: p.body,
+        message_id: sentMessageIds.get(p.leadId) ?? null,
+        sent_at: new Date().toISOString(),
+      }));
+
+    if (outreachRows.length > 0) {
+      const { error: outreachError } = await supabase
+        .from("outreach_messages")
+        .insert(outreachRows);
+
+      if (outreachError) {
+        console.error("outreach_messages insert error:", {
+          message: outreachError.message,
+          campaignId,
+        });
+      }
+    }
 
     await supabase.from("audit_events").insert({
       user_id: user.id,
@@ -243,14 +253,13 @@ export async function POST(
       details: {
         leadCount: prospects.length,
         sent: sentCount,
-        notSent: notSentCount,
+        notSent: prospects.length - sentCount,
         yourName,
       },
     });
 
-    const message = hasResultData
-      ? `Successfully sent cold outreach emails. ${sentCount} sent${notSentCount > 0 ? `, ${notSentCount} not sent` : ""}. Check your dashboard for real metrics on deliverability.`
-      : `Successfully sent cold outreach emails. Emails have been queued for sending. Check your dashboard for delivery status.`;
+    const notSentCount = prospects.length - sentCount;
+    const message = `Successfully sent cold outreach emails. ${sentCount} sent${notSentCount > 0 ? `, ${notSentCount} not sent` : ""}. Check your dashboard for metrics.`;
 
     return NextResponse.json({
       ok: true,
@@ -261,18 +270,12 @@ export async function POST(
     });
   } catch (e) {
     console.error("campaigns send error:", e);
-    const isNetworkError =
-      e instanceof Error &&
-      "cause" in e &&
-      e.cause instanceof Error &&
-      ((e.cause.message?.includes("timeout") ?? false) ||
-        (e.cause as { code?: string }).code === "UND_ERR_CONNECT_TIMEOUT");
     return NextResponse.json(
       {
         error:
           "Sending failed. Please try again later and if it persists contact support.",
       },
-      { status: isNetworkError ? 503 : 500 },
+      { status: 500 },
     );
   }
 }

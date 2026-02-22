@@ -19,7 +19,7 @@ import { TemplatePreview } from "@/components/dashboard/outreach/TemplatePreview
 import { ConfirmAndStartBlock } from "@/components/dashboard/outreach/ConfirmAndStartBlock";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Star } from "lucide-react";
+import { Sparkles } from "@/components/icons/Sparkles";
 
 type LeadRow = {
   id: string;
@@ -69,16 +69,23 @@ export default function CampaignDetailPage() {
   const [yourName, setYourName] = useState("");
   const [subjectTemplate, setSubjectTemplate] = useState(DEFAULT_SUBJECT);
   const [generateTemplateLoading, setGenerateTemplateLoading] = useState(false);
-  const [generateTemplateError, setGenerateTemplateError] = useState<string | null>(null);
-  const [sendPhase, setSendPhase] = useState<"idle" | "sending" | "success" | "error" | "timeout">("idle");
+  const [generateTemplateError, setGenerateTemplateError] = useState<
+    string | null
+  >(null);
+  const [sendPhase, setSendPhase] = useState<
+    "idle" | "sending" | "success" | "error" | "timeout"
+  >("idle");
   const [sendError, setSendError] = useState<string | null>(null);
+  const [sendErrorCode, setSendErrorCode] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [campaignAlreadySent, setCampaignAlreadySent] = useState(false);
   const [templateGeneratedOnce, setTemplateGeneratedOnce] = useState(false);
   const [saveBriefLoading, setSaveBriefLoading] = useState(false);
   const [saveTemplateLoading, setSaveTemplateLoading] = useState(false);
   const [saveBriefMessage, setSaveBriefMessage] = useState<string | null>(null);
-  const [saveTemplateMessage, setSaveTemplateMessage] = useState<string | null>(null);
+  const [saveTemplateMessage, setSaveTemplateMessage] = useState<string | null>(
+    null,
+  );
   const [outreachLoadDone, setOutreachLoadDone] = useState(false);
 
   useEffect(() => {
@@ -101,7 +108,7 @@ export default function CampaignDetailPage() {
       const { data: leadsData } = await supabase
         .from("leads")
         .select(
-          "id, lead_batch_id, full_name, email, email_status, linkedin_url, position, country, org_name, org_description, org_website, created_at"
+          "id, lead_batch_id, full_name, email, email_status, linkedin_url, position, country, org_name, org_description, org_website, created_at",
         )
         .eq("campaign_id", campaignId)
         .order("created_at", { ascending: false });
@@ -129,8 +136,9 @@ export default function CampaignDetailPage() {
         .select("status")
         .eq("campaign_id", campaignId);
 
-      const emailsDelivered =
-        (sendResults ?? []).filter((r) => r.status === "sent").length;
+      const emailsDelivered = (sendResults ?? []).filter(
+        (r) => r.status === "sent",
+      ).length;
       const inboxPct =
         totalLeads > 0 && emailsDelivered > 0
           ? (emailsDelivered / totalLeads) * 100
@@ -154,8 +162,9 @@ export default function CampaignDetailPage() {
       .from("campaign_send_results")
       .select("status")
       .eq("campaign_id", campaignId);
-    const emailsDelivered =
-      (sendResults ?? []).filter((r) => r.status === "sent").length;
+    const emailsDelivered = (sendResults ?? []).filter(
+      (r) => r.status === "sent",
+    ).length;
     const totalLeads = leads.length;
     const inboxPct =
       totalLeads > 0 && emailsDelivered > 0
@@ -200,7 +209,7 @@ export default function CampaignDetailPage() {
         escape(l.org_description),
         escape(l.org_website),
         escape(l.created_at),
-      ].join(",")
+      ].join(","),
     );
     const csv = [headers.join(","), ...csvRows].join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -236,11 +245,14 @@ export default function CampaignDetailPage() {
         setGenerateTemplateError(data.error ?? "Failed to generate template");
         return;
       }
-      if (data.subject != null && String(data.subject).trim()) setSubjectTemplate(String(data.subject).trim());
+      if (data.subject != null && String(data.subject).trim())
+        setSubjectTemplate(String(data.subject).trim());
       if (data.template) setEmailTemplate(data.template);
       setTemplateGeneratedOnce(true);
     } catch (e) {
-      setGenerateTemplateError(e instanceof Error ? e.message : "Request failed");
+      setGenerateTemplateError(
+        e instanceof Error ? e.message : "Request failed",
+      );
     } finally {
       setGenerateTemplateLoading(false);
     }
@@ -250,18 +262,25 @@ export default function CampaignDetailPage() {
     if (!campaignId || outreachLoadDone) return;
     async function loadSavedOutreach() {
       const supabase = createClient();
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       if (!user) return;
       const { data } = await supabase
         .from("campaign_outreach_saves")
-        .select("icp_description, offer_description, subject_template, body_template")
+        .select(
+          "icp_description, offer_description, subject_template, body_template",
+        )
         .eq("campaign_id", campaignId)
         .eq("user_id", user.id)
         .maybeSingle();
       if (data) {
-        if (data.icp_description != null) setIcpDescription(data.icp_description);
-        if (data.offer_description != null) setOfferDescription(data.offer_description);
-        if (data.subject_template != null && data.subject_template.trim()) setSubjectTemplate(data.subject_template.trim());
+        if (data.icp_description != null)
+          setIcpDescription(data.icp_description);
+        if (data.offer_description != null)
+          setOfferDescription(data.offer_description);
+        if (data.subject_template != null && data.subject_template.trim())
+          setSubjectTemplate(data.subject_template.trim());
         if (data.body_template != null) setEmailTemplate(data.body_template);
       }
       setOutreachLoadDone(true);
@@ -274,31 +293,33 @@ export default function CampaignDetailPage() {
     setSaveBriefLoading(true);
     try {
       const supabase = createClient();
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       if (!user) {
         setSaveBriefMessage("You must be signed in to save.");
         return;
       }
       const leadBatchId = leads[0]?.lead_batch_id ?? null;
-      const { error } = await supabase
-        .from("campaign_outreach_saves")
-        .upsert(
-          {
-            user_id: user.id,
-            campaign_id: campaignId,
-            lead_batch_id: leadBatchId,
-            icp_description: icpDescription,
-            offer_description: offerDescription,
-            subject_template: subjectTemplate,
-            body_template: emailTemplate,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "user_id,campaign_id" }
-        );
+      const { error } = await supabase.from("campaign_outreach_saves").upsert(
+        {
+          user_id: user.id,
+          campaign_id: campaignId,
+          lead_batch_id: leadBatchId,
+          icp_description: icpDescription,
+          offer_description: offerDescription,
+          subject_template: subjectTemplate,
+          body_template: emailTemplate,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id,campaign_id" },
+      );
       if (error) throw error;
       setSaveBriefMessage("Brief saved.");
     } catch (e) {
-      setSaveBriefMessage(e instanceof Error ? e.message : "Failed to save brief.");
+      setSaveBriefMessage(
+        e instanceof Error ? e.message : "Failed to save brief.",
+      );
     } finally {
       setSaveBriefLoading(false);
     }
@@ -309,31 +330,33 @@ export default function CampaignDetailPage() {
     setSaveTemplateLoading(true);
     try {
       const supabase = createClient();
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       if (!user) {
         setSaveTemplateMessage("You must be signed in to save.");
         return;
       }
       const leadBatchId = leads[0]?.lead_batch_id ?? null;
-      const { error } = await supabase
-        .from("campaign_outreach_saves")
-        .upsert(
-          {
-            user_id: user.id,
-            campaign_id: campaignId,
-            lead_batch_id: leadBatchId,
-            icp_description: icpDescription,
-            offer_description: offerDescription,
-            subject_template: subjectTemplate,
-            body_template: emailTemplate,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "user_id,campaign_id" }
-        );
+      const { error } = await supabase.from("campaign_outreach_saves").upsert(
+        {
+          user_id: user.id,
+          campaign_id: campaignId,
+          lead_batch_id: leadBatchId,
+          icp_description: icpDescription,
+          offer_description: offerDescription,
+          subject_template: subjectTemplate,
+          body_template: emailTemplate,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id,campaign_id" },
+      );
       if (error) throw error;
       setSaveTemplateMessage("Template saved.");
     } catch (e) {
-      setSaveTemplateMessage(e instanceof Error ? e.message : "Failed to save template.");
+      setSaveTemplateMessage(
+        e instanceof Error ? e.message : "Failed to save template.",
+      );
     } finally {
       setSaveTemplateLoading(false);
     }
@@ -344,6 +367,7 @@ export default function CampaignDetailPage() {
   const handleConfirmAndStart = async () => {
     if (!emailTemplate.trim() || !yourName.trim() || leads.length === 0) return;
     setSendError(null);
+    setSendErrorCode(null);
     setSuccessMessage(null);
     setSendPhase("sending");
     setStartCampaignLoading(true);
@@ -367,11 +391,18 @@ export default function CampaignDetailPage() {
       clearTimeout(timeoutId);
       if (!res.ok) {
         setSendPhase("error");
-        setSendError(data.error ?? "Sending failed. Please try again later and if it persists contact support.");
+        setSendError(
+          data.error ??
+            "Sending failed. Please try again later and if it persists contact support.",
+        );
+        setSendErrorCode(data.code ?? null);
         return;
       }
       setSendPhase("success");
-      setSuccessMessage(data.message ?? "Successfully sent cold outreach emails. Check your dashboard for real metrics on deliverability.");
+      setSuccessMessage(
+        data.message ??
+          "Successfully sent cold outreach emails. Check your dashboard for real metrics on deliverability.",
+      );
       void refreshSendMetrics();
     } catch (e) {
       clearTimeout(timeoutId);
@@ -381,7 +412,10 @@ export default function CampaignDetailPage() {
         setSendError(null);
       } else {
         setSendPhase("error");
-        setSendError("Sending failed. Please try again later and if it persists contact support.");
+        setSendError(
+          "Sending failed. Please try again later and if it persists contact support.",
+        );
+        setSendErrorCode(null);
       }
     } finally {
       setStartCampaignLoading(false);
@@ -390,7 +424,7 @@ export default function CampaignDetailPage() {
 
   const handleResendCampaign = () => {
     const confirmed = window.confirm(
-      "This will resend this email once again to all leads. Recipients may receive duplicate emails. Are you sure you want to continue?"
+      "This will resend this email once again to all leads. Recipients may receive duplicate emails. Are you sure you want to continue?",
     );
     if (confirmed) handleConfirmAndStart();
   };
@@ -484,22 +518,32 @@ export default function CampaignDetailPage() {
           {leadsPreviewOpen && (
             <div className="rounded-lg border border-white/10 bg-white/5 overflow-x-auto">
               {leadsLoading ? (
-                <div className="p-8 text-center text-white/60">Loading leads…</div>
+                <div className="p-8 text-center text-white/60">
+                  Loading leads…
+                </div>
               ) : leads.length === 0 ? (
-                <div className="p-8 text-center text-white/60">No leads yet.</div>
+                <div className="p-8 text-center text-white/60">
+                  No leads yet.
+                </div>
               ) : (
                 <Table>
                   <TableHeader>
                     <TableRow className="border-white/10">
                       <TableHead className="text-white/70">Full Name</TableHead>
                       <TableHead className="text-white/70">Email</TableHead>
-                      <TableHead className="text-white/70">Email Status</TableHead>
+                      <TableHead className="text-white/70">
+                        Email Status
+                      </TableHead>
                       <TableHead className="text-white/70">LinkedIn</TableHead>
                       <TableHead className="text-white/70">Position</TableHead>
                       <TableHead className="text-white/70">Country</TableHead>
                       <TableHead className="text-white/70">Org Name</TableHead>
-                      <TableHead className="text-white/70">Org Description</TableHead>
-                      <TableHead className="text-white/70">Org Website</TableHead>
+                      <TableHead className="text-white/70">
+                        Org Description
+                      </TableHead>
+                      <TableHead className="text-white/70">
+                        Org Website
+                      </TableHead>
                       <TableHead className="text-white/70">Created</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -509,7 +553,9 @@ export default function CampaignDetailPage() {
                         <TableCell className="text-white font-medium">
                           {lead.full_name ?? "—"}
                         </TableCell>
-                        <TableCell className="text-white/90">{lead.email}</TableCell>
+                        <TableCell className="text-white/90">
+                          {lead.email}
+                        </TableCell>
                         <TableCell
                           className={`text-sm ${
                             lead.email_status === "valid"
@@ -564,12 +610,12 @@ export default function CampaignDetailPage() {
 
         {/* Section 3 - Cold outreach: ICP & offer → Generate → Edit → Preview → Confirm */}
         <div className="space-y-10">
-          <h2 className="text-xl font-semibold text-white">
-            Cold outreach
-          </h2>
+          <h2 className="text-xl font-semibold text-white">Cold outreach</h2>
 
           <div className="rounded-lg border border-white/10 bg-white/5 p-6">
-            <h3 className="text-lg font-medium text-white mb-4">1. Describe problems & your solution</h3>
+            <h3 className="text-lg font-medium text-white mb-4">
+              1. Describe problems & your solution
+            </h3>
             <OutreachBriefForm
               icpDescription={icpDescription}
               offerDescription={offerDescription}
@@ -594,7 +640,10 @@ export default function CampaignDetailPage() {
                   "Regenerate using AI"
                 ) : (
                   <>
-                    <Star className="w-4 h-4 mr-1.5 inline-block fill-current" aria-hidden />
+                    <Sparkles
+                      className="w-7 h-7 inline-block fill-current"
+                      aria-hidden
+                    />
                     Generate template using AI
                   </>
                 )}
@@ -608,7 +657,9 @@ export default function CampaignDetailPage() {
                 {saveBriefLoading ? "Saving…" : "Save brief"}
               </Button>
               {saveBriefMessage && (
-                <span className="text-sm text-white/70">{saveBriefMessage}</span>
+                <span className="text-sm text-white/70">
+                  {saveBriefMessage}
+                </span>
               )}
               {generateTemplateError && (
                 <p className="mt-2 w-full text-sm text-red-400" role="alert">
@@ -619,16 +670,22 @@ export default function CampaignDetailPage() {
           </div>
 
           <div className="rounded-lg border border-white/10 bg-white/5 p-6">
-            <h3 className="text-lg font-medium text-white mb-4">2. Edit template & preview</h3>
+            <h3 className="text-lg font-medium text-white mb-4">
+              2. Edit template & preview
+            </h3>
             <div className="mb-4">
-              <Label className="text-white/90 mb-1.5 block">Email subject</Label>
+              <Label className="text-white/90 mb-1.5 block">
+                Email subject
+              </Label>
               <Input
                 value={subjectTemplate}
                 onChange={(e) => setSubjectTemplate(e.target.value)}
                 placeholder="e.g. Quick idea for {{org_name}}"
                 className="mb-4"
               />
-              <Label className="text-white/90 mb-1.5 block">Email body (template)</Label>
+              <Label className="text-white/90 mb-1.5 block">
+                Email body (template)
+              </Label>
               <TemplateEditor
                 value={emailTemplate}
                 onChange={setEmailTemplate}
@@ -651,44 +708,72 @@ export default function CampaignDetailPage() {
                 {saveTemplateLoading ? "Saving…" : "Save template"}
               </Button>
               {saveTemplateMessage && (
-                <span className="text-sm text-white/70">{saveTemplateMessage}</span>
+                <span className="text-sm text-white/70">
+                  {saveTemplateMessage}
+                </span>
               )}
             </div>
           </div>
 
           <div>
-            <h3 className="text-lg font-medium text-white mb-4">3. Confirm and start</h3>
+            <h3 className="text-lg font-medium text-white mb-4">
+              3. Confirm and start
+            </h3>
             {sendPhase === "sending" && (
               <>
-                <p className="text-white/90 text-sm mb-2">Sending outreach messages......</p>
+                <p className="text-white/90 text-sm mb-2">
+                  Sending outreach messages......
+                </p>
                 <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 mb-4">
                   <p className="text-amber-200 text-sm">
-                    Please hold on as we send your cold outreach emails to the recipients (approx 2–3 min). We&apos;ll give you a response as soon as it&apos;s complete.
+                    Please hold on as we send your cold outreach emails to the
+                    recipients (approx 2–3 min). We&apos;ll give you a response
+                    as soon as it&apos;s complete.
                   </p>
                 </div>
               </>
             )}
             {showAlreadySentUI && displaySuccessMessage && (
               <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4 mb-4">
-                <p className="text-emerald-200 text-sm">{displaySuccessMessage}</p>
+                <p className="text-emerald-200 text-sm">
+                  {displaySuccessMessage}
+                </p>
               </div>
             )}
             {sendPhase === "error" && sendError && (
               <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 mb-4">
-                <p className="text-red-200 text-sm" role="alert">{sendError}</p>
+                <p className="text-red-200 text-sm" role="alert">
+                  {sendErrorCode === "smtp_not_configured" ? (
+                    <>
+                      {sendError}{" "}
+                      <Link
+                        href="/dashboard/mail-config-settings"
+                        className="underline font-medium text-red-100 hover:text-white"
+                      >
+                        Go to Mail Config Settings
+                      </Link>
+                    </>
+                  ) : (
+                    sendError
+                  )}
+                </p>
               </div>
             )}
             {sendPhase === "timeout" && (
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 mb-4">
                 <p className="text-amber-200 text-sm">
-                  This is taking longer than usual. Check your dashboard in a few minutes.
+                  This is taking longer than usual. Check your dashboard in a
+                  few minutes.
                 </p>
               </div>
             )}
             {showAlreadySentUI ? (
               <div className="rounded-lg border border-white/10 bg-white/5 p-4 space-y-4">
                 <div>
-                  <Label htmlFor="resend-yourName" className="block text-white/90 mb-2">
+                  <Label
+                    htmlFor="resend-yourName"
+                    className="block text-white/90 mb-2"
+                  >
                     Your name (required to resend)
                   </Label>
                   <Input
@@ -705,13 +790,19 @@ export default function CampaignDetailPage() {
                   variant="primary"
                   size="md"
                   onClick={handleResendCampaign}
-                  disabled={startCampaignLoading || leads.length === 0 || !yourName.trim()}
+                  disabled={
+                    startCampaignLoading ||
+                    leads.length === 0 ||
+                    !yourName.trim()
+                  }
                   className="!bg-[#7c3aed] hover:!bg-[#6d28d9] !shadow-[0_0_15px_rgba(124,58,237,0.35)] hover:!shadow-[0_0_20px_rgba(124,58,237,0.45)]"
                 >
                   {startCampaignLoading ? "Sending…" : "Resend Campaign"}
                 </Button>
                 <p className="text-white/60 text-sm">
-                  Resend will send this email again to all {leads.length} lead{leads.length !== 1 ? "s" : ""}. Use only if you need to resend (e.g. template fix).
+                  Resend will send this email again to all {leads.length} lead
+                  {leads.length !== 1 ? "s" : ""}. Use only if you need to
+                  resend (e.g. template fix).
                 </p>
               </div>
             ) : (
