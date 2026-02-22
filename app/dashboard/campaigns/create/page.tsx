@@ -103,10 +103,10 @@ const INDUSTRY_OPTIONS = [
   "Wireless",
 ];
 
-const TOTAL_STEPS = 8;
+const TOTAL_STEPS = 5;
 
 const N8N_WEBHOOK_URL =
-  "https://n8n.srv1036993.hstgr.cloud/webhook-test/agentible-webapp";
+  "https://n8n.srv1036993.hstgr.cloud/webhook/agentible-generate-leads";
 
 /** GET URL for campaign status (optional). If not set, status is read from Supabase campaigns.status. */
 const N8N_STATUS_GET_URL =
@@ -189,6 +189,185 @@ async function createLeadBatch(
     return { error: "Lead batch created but no id returned" };
   }
   return { leadBatchId: data.id };
+}
+
+// Parse one CSV line (handles quoted commas)
+function parseCsvRow(line: string): string[] {
+  const out: string[] = [];
+  let cell = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') {
+      inQuotes = !inQuotes;
+    } else if (c === "," && !inQuotes) {
+      out.push(cell.trim().replace(/^"|"$/g, ""));
+      cell = "";
+    } else {
+      cell += c;
+    }
+  }
+  out.push(cell.trim().replace(/^"|"$/g, ""));
+  return out;
+}
+
+function normalizeHeaderForMap(h: string): string {
+  return h.toLowerCase().trim().replace(/\s+/g, " ");
+}
+
+// CSV header variants (normalized) -> DB field
+type CsvDbKey =
+  | "email"
+  | "first_name"
+  | "last_name"
+  | "full_name"
+  | "position"
+  | "org_name"
+  | "org_description"
+  | "linkedin_url"
+  | "country"
+  | "org_website";
+const CSV_TO_DB_MAP: { dbKey: CsvDbKey; aliases: string[] }[] = [
+  { dbKey: "email", aliases: ["email"] },
+  { dbKey: "first_name", aliases: ["first_name", "first name", "firstname"] },
+  { dbKey: "last_name", aliases: ["last_name", "last name", "lastname"] },
+  { dbKey: "full_name", aliases: ["full_name", "full name", "fullname"] },
+  { dbKey: "position", aliases: ["position", "title"] },
+  {
+    dbKey: "org_name",
+    aliases: [
+      "org_name",
+      "org name",
+      "orgname",
+      "organization name",
+      "organizationname",
+    ],
+  },
+  { dbKey: "org_description", aliases: ["org_description", "org description"] },
+  { dbKey: "linkedin_url", aliases: ["linkedin_url", "linkedin url"] },
+  { dbKey: "country", aliases: ["country"] },
+  { dbKey: "org_website", aliases: ["org_website", "org website", "website"] },
+];
+
+type LeadInsertRow = {
+  user_id: string;
+  lead_batch_id: string;
+  campaign_id: string;
+  full_name: string | null;
+  email: string;
+  email_status: string;
+  position?: string | null;
+  org_name?: string | null;
+  org_description?: string | null;
+  linkedin_url?: string | null;
+  country?: string | null;
+  org_website?: string | null;
+};
+
+async function parseFullCsv(
+  file: File,
+): Promise<{ headers: string[]; rows: string[][] }> {
+  const text = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string) ?? "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(file);
+  });
+  const lines = text.split(/\r?\n/).filter((line) => line.trim());
+  if (lines.length < 2) return { headers: [], rows: [] };
+  const headers = parseCsvRow(lines[0]);
+  const rows = lines.slice(1).map(parseCsvRow);
+  return { headers, rows };
+}
+
+function mapCsvRowToLead(
+  row: string[],
+  headerToIndex: Map<string, number>,
+  userId: string,
+  leadBatchId: string,
+  campaignId: string,
+): LeadInsertRow | null {
+  const get = (key: CsvDbKey): string => {
+    const aliases = CSV_TO_DB_MAP.find((m) => m.dbKey === key)?.aliases ?? [];
+    for (const alias of aliases) {
+      const idx = headerToIndex.get(normalizeHeaderForMap(alias));
+      if (idx !== undefined && row[idx] !== undefined)
+        return (row[idx] ?? "").trim();
+    }
+    return "";
+  };
+  const email = get("email").trim();
+  if (!email) return null;
+
+  let full_name: string | null = get("full_name") || null;
+  if (!full_name) {
+    const first = get("first_name");
+    const last = get("last_name");
+    if (first || last)
+      full_name = [first, last].filter(Boolean).join(" ").trim() || null;
+  }
+
+  const position = get("position") || null;
+  const org_name = get("org_name") || null;
+  const org_description = get("org_description") || null;
+  const linkedin_url = get("linkedin_url") || null;
+  const country = get("country") || null;
+  const org_website = get("org_website") || null;
+
+  return {
+    user_id: userId,
+    lead_batch_id: leadBatchId,
+    campaign_id: campaignId,
+    full_name: full_name || null,
+    email,
+    email_status: "unknown",
+    ...(position && { position }),
+    ...(org_name && { org_name }),
+    ...(org_description && { org_description }),
+    ...(linkedin_url && { linkedin_url }),
+    ...(country && { country }),
+    ...(org_website && { org_website }),
+  };
+}
+
+type InsertLeadsFromCsvResult =
+  | { ok: true; inserted: number }
+  | { error: string };
+
+async function insertLeadsFromCsv(
+  supabase: SupabaseClient,
+  userId: string,
+  campaignId: string,
+  leadBatchId: string,
+  file: File,
+): Promise<InsertLeadsFromCsvResult> {
+  const { headers, rows } = await parseFullCsv(file);
+  const normalizedHeaders = headers.map(normalizeHeaderForMap);
+  const headerToIndex = new Map<string, number>();
+  normalizedHeaders.forEach((h, i) => headerToIndex.set(h, i));
+
+  const BATCH_SIZE = 100;
+  let inserted = 0;
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    const chunk = rows.slice(i, i + BATCH_SIZE);
+    const leads: LeadInsertRow[] = [];
+    for (const row of chunk) {
+      const lead = mapCsvRowToLead(
+        row,
+        headerToIndex,
+        userId,
+        leadBatchId,
+        campaignId,
+      );
+      if (lead) leads.push(lead);
+    }
+    if (leads.length > 0) {
+      const { error } = await supabase.from("leads").insert(leads);
+      if (error) return { error: error.message };
+      inserted += leads.length;
+    }
+  }
+  return { ok: true, inserted };
 }
 
 type TriggerLeadGenerationResult =
@@ -304,7 +483,7 @@ export default function CreateCampaignPage() {
     maxLeadsToFetch: 100,
   });
   const [leadsApproved, setLeadsApproved] = useState(false);
-  const [fetchLeadsLoading, setFetchLeadsLoading] = useState(false);
+  const [createCampaignLoading, setCreateCampaignLoading] = useState(false);
   const [fetchLeadsError, setFetchLeadsError] = useState<string | null>(null);
   const [fetchLeadsResult, setFetchLeadsResult] = useState<{
     message: string;
@@ -314,6 +493,10 @@ export default function CreateCampaignPage() {
   const [acknowledgedLeadsRequest, setAcknowledgedLeadsRequest] =
     useState(false);
   const [detectedCsvColumns, setDetectedCsvColumns] = useState<string[]>([]);
+  const [csvPreviewRows, setCsvPreviewRows] = useState<string[][]>([]);
+  const [csvValidationError, setCsvValidationError] = useState<string | null>(
+    null,
+  );
   // Launch step: campaign status from webhook GET or Supabase
   const [campaignStatus, setCampaignStatus] = useState<
     "pending" | "completed" | null
@@ -383,21 +566,66 @@ export default function CreateCampaignPage() {
     },
   ];
 
+  // Normalize CSV header for comparison (lowercase, trim, single spaces). Case-insensitive.
+  const normalizeHeader = (h: string) =>
+    h.toLowerCase().trim().replace(/\s+/g, " ");
+
+  // Required: 3 minimum — name (one of first/last/full), email, org. Any casing accepted.
+  const REQUIRED_CSV_GROUPS: string[][] = [
+    [
+      "first_name",
+      "first name",
+      "firstname",
+      "last_name",
+      "last name",
+      "lastname",
+      "full_name",
+      "full name",
+      "fullname",
+    ], // name: first_name, last_name, or full_name
+    ["email"],
+    ["organization name", "organizationname", "orgname", "org name"], // orgName, organizationName
+  ];
+
+  const validateCsvColumns = (
+    headers: string[],
+  ): { valid: boolean; missing: string[] } => {
+    const normalized = new Set(headers.map((h) => normalizeHeader(h)));
+    const missing: string[] = [];
+    const groupLabels = [
+      "name (first_name, last_name, or full_name)",
+      "email",
+      "orgName / organizationName",
+    ];
+    REQUIRED_CSV_GROUPS.forEach((group, i) => {
+      const hasAny = group.some((alias) =>
+        normalized.has(normalizeHeader(alias)),
+      );
+      if (!hasAny) missing.push(groupLabels[i]);
+    });
+    return { valid: missing.length === 0, missing };
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    setCsvValidationError(null);
     if (file) {
-      setFormData({ ...formData, csvFile: file });
+      setFormData((prev) => ({ ...prev, csvFile: file }));
       const reader = new FileReader();
       reader.onload = (ev) => {
-        const text = ev.target?.result as string;
-        const firstLine = text.split("\n")[0];
-        if (firstLine) {
-          setDetectedCsvColumns(
-            firstLine.split(",").map((c) => c.trim().replace(/^"|"$/g, "")),
-          );
+        const text = (ev.target?.result as string) ?? "";
+        const lines = text.split(/\r?\n/).filter((line) => line.trim());
+        if (lines.length > 0) {
+          const headers = parseCsvRow(lines[0]);
+          setDetectedCsvColumns(headers);
+          const rows = lines.slice(1, 101).map(parseCsvRow);
+          setCsvPreviewRows(rows);
+        } else {
+          setDetectedCsvColumns([]);
+          setCsvPreviewRows([]);
         }
       };
-      reader.readAsText(file.slice(0, 1024));
+      reader.readAsText(file);
     }
   };
 
@@ -407,39 +635,25 @@ export default function CreateCampaignPage() {
     setFormData({ ...formData, emails: newEmails });
   };
 
-  const handleFetchLeads = async () => {
+  const handleGoToPreview = () => {
     setFetchLeadsError(null);
-    setFetchLeadsLoading(true);
-    try {
-      const leadGenBody = {
-        companyDomainMatchMode: "contains",
-        emailStatus: "verified",
-        hasEmail: true,
-        hasPhone: false,
-        includeSimilarTitles: false,
-        resetSavedProgress: false,
-        companyLocationCountryIncludes: formData.targetLocations,
-        personLocationCountryIncludes: formData.targetLocations,
-        personTitleIncludes: formData.jobTitles,
-        companySizeIncludes: formData.employeeRanges,
-        companyIndustryIncludes: formData.industryKeywords,
-        totalResults: formData.maxLeadsToFetch,
-      };
-      const result = await triggerLeadGeneration(leadGenBody, campaignId);
-      if ("error" in result) {
-        setFetchLeadsError(result.error);
-        return;
-      }
-      setFetchLeadsResult({
-        message: result.message,
-        campaign_id: result.campaign_id,
-        lead_batch_id: result.lead_batch_id,
-      });
-      setStep(3);
-    } finally {
-      setFetchLeadsLoading(false);
-    }
+    setStep(3);
   };
+
+  const buildLeadGenBody = () => ({
+    companyDomainMatchMode: "contains",
+    emailStatus: "verified",
+    hasEmail: true,
+    hasPhone: false,
+    includeSimilarTitles: false,
+    resetSavedProgress: false,
+    companyLocationCountryIncludes: formData.targetLocations,
+    personLocationCountryIncludes: formData.targetLocations,
+    personTitleIncludes: formData.jobTitles,
+    companySizeIncludes: formData.employeeRanges,
+    companyIndustryIncludes: formData.industryKeywords,
+    totalResults: formData.maxLeadsToFetch,
+  });
 
   const handleGenerateAiEmails = () => {
     setFormData({
@@ -454,10 +668,68 @@ export default function CreateCampaignPage() {
     setAiEmailModalOpen(false);
   };
 
-  const handleSubmit = () => {
-    // Handle campaign creation
-    console.log("Creating campaign:", formData);
-    router.push("/dashboard");
+  const handleSubmit = async () => {
+    const supabase = createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user?.id) {
+      router.push("/dashboard");
+      return;
+    }
+    if (campaignId) {
+      router.push(`/dashboard/campaigns/${campaignId}`);
+      return;
+    }
+    setCreateCampaignLoading(true);
+    setFetchLeadsError(null);
+    try {
+      const createResult = await createCampaign(
+        supabase,
+        user.id,
+        campaignName.trim() || null,
+      );
+      if ("error" in createResult) {
+        setFetchLeadsError(createResult.error);
+        return;
+      }
+      if (leadSource === "create") {
+        const leadGenBody = buildLeadGenBody();
+        const result = await triggerLeadGeneration(
+          leadGenBody,
+          createResult.campaignId,
+        );
+        if ("error" in result) {
+          setFetchLeadsError(result.error);
+          return;
+        }
+      } else if (leadSource === "import" && formData.csvFile) {
+        const batchResult = await createLeadBatch(
+          supabase,
+          user.id,
+          createResult.campaignId,
+          formData.csvFile.name,
+        );
+        if ("error" in batchResult) {
+          setFetchLeadsError(batchResult.error);
+          return;
+        }
+        const insertResult = await insertLeadsFromCsv(
+          supabase,
+          user.id,
+          createResult.campaignId,
+          batchResult.leadBatchId,
+          formData.csvFile,
+        );
+        if ("error" in insertResult) {
+          setFetchLeadsError(insertResult.error);
+          return;
+        }
+      }
+      router.push(`/dashboard/campaigns/${createResult.campaignId}`);
+    } finally {
+      setCreateCampaignLoading(false);
+    }
   };
 
   const canFetchLeads = (): boolean => {
@@ -481,15 +753,10 @@ export default function CreateCampaignPage() {
     return false;
   };
 
-  const canLaunch = () =>
-    leadsApproved &&
-    formData.emails.filter((e) => e.trim()).length >= 3 &&
-    sendingAccountConnected;
-
-  // When on Launch step with a campaign_id, fetch status (GET webhook or Supabase) until completed
+  // When on Launch step with a campaign_id, fetch status (GET webhook or Supabase) until completed (kept for future launch flow)
   useEffect(() => {
     const campaignId = fetchLeadsResult?.campaign_id;
-    if (step !== 7 || !campaignId) {
+    if (step !== 4 || !campaignId) {
       if (campaignId == null) {
         setCampaignStatus(null);
         setCampaignStatusMessage(null);
@@ -685,13 +952,6 @@ export default function CreateCampaignPage() {
     URL.revokeObjectURL(url);
   };
 
-  const isLaunchEnabled = () => {
-    const base = canLaunch();
-    const campaignId = fetchLeadsResult?.campaign_id;
-    if (!campaignId) return base;
-    return base && (campaignStatus === "completed" || campaignDataFetched);
-  };
-
   return (
     <div className="min-h-screen bg-[#0f1419] pt-24 pb-20 px-6">
       <div className="max-w-3xl mx-auto">
@@ -747,7 +1007,10 @@ export default function CreateCampaignPage() {
               </p>
               <div className="space-y-4 max-w-md">
                 <div>
-                  <Label htmlFor="campaign-name" className="text-white/90 mb-2 block">
+                  <Label
+                    htmlFor="campaign-name"
+                    className="text-white/90 mb-2 block"
+                  >
                     Campaign name
                   </Label>
                   <Input
@@ -762,20 +1025,8 @@ export default function CreateCampaignPage() {
                 <Button
                   variant="primary"
                   size="md"
-                  onClick={async () => {
-                    const name = campaignName.trim();
-                    if (!name) return;
-                    const supabase = createClient();
-                    const {
-                      data: { user },
-                    } = await supabase.auth.getUser();
-                    if (!user?.id) return;
-                    const result = await createCampaign(supabase, user.id, name);
-                    if ("error" in result) {
-                      setFetchLeadsError(result.error);
-                      return;
-                    }
-                    setCampaignId(result.campaignId);
+                  onClick={() => {
+                    if (!campaignName.trim()) return;
                     setFetchLeadsError(null);
                     setStep(1);
                   }}
@@ -789,69 +1040,94 @@ export default function CreateCampaignPage() {
           )}
           {step === 1 && (
             <div>
-              {leadSource === null ? (
-                <>
-                  <h2 className="text-xl font-semibold text-white mb-2">
-                    How would you like to get started?
-                  </h2>
-                  <p className="text-white/70 mb-6 text-sm">
-                    Do you already have a list of leads, or would you like us to
-                    help you find and create targeted leads?
-                  </p>
-                  <div className="space-y-4">
-                    <label className="flex items-start gap-4 p-4 rounded-lg border border-white/20 bg-white/5 hover:bg-white/10 cursor-pointer transition-colors">
-                      <input
-                        type="radio"
-                        name="leadSource"
-                        value="import"
-                        checked={leadSource === "import"}
-                        onChange={() => setLeadSource("import")}
-                        className="mt-1 w-4 h-4 text-[#2563EB] focus:ring-[#2563EB] focus:ring-2"
-                      />
-                      <div className="flex-1">
-                        <div className="font-medium text-white mb-1">
-                          Yes, import my own leads (CSV)
-                        </div>
-                        <div className="text-sm text-white/60 mb-1">
-                          Upload a CSV with your existing list. Next you’ll
-                          review and clean the data before launching.
-                        </div>
-                      </div>
-                    </label>
-                    <label className="flex items-start gap-4 p-4 rounded-lg border border-white/20 bg-white/5 hover:bg-white/10 cursor-pointer transition-colors">
-                      <input
-                        type="radio"
-                        name="leadSource"
-                        value="create"
-                        checked={leadSource === "create"}
-                        onChange={() => setLeadSource("create")}
-                        className="mt-1 w-4 h-4 text-[#2563EB] focus:ring-[#2563EB] focus:ring-2"
-                      />
-                      <div className="flex-1">
-                        <div className="font-medium text-white mb-1">
-                          No, create leads from scratch (Apollo)
-                        </div>
-                        <div className="text-sm text-white/60 mb-1">
-                          We’ll fetch leads based on your criteria (location,
-                          titles, company size, etc.), then you review and
-                          approve before launching.
-                        </div>
-                      </div>
-                    </label>
+              <h2 className="text-xl font-semibold text-white mb-2">
+                How would you like to get leads?
+              </h2>
+              <p className="text-white/70 mb-6 text-sm">
+                Upload your own list or generate targeted leads from our
+                criteria.
+              </p>
+              <div className="space-y-4 mb-6">
+                <label className="flex items-start gap-4 p-4 rounded-lg border border-white/20 bg-white/5 hover:bg-white/10 cursor-pointer transition-colors">
+                  <input
+                    type="radio"
+                    name="leadSource"
+                    value="import"
+                    checked={leadSource === "import"}
+                    onChange={() => setLeadSource("import")}
+                    className="mt-1 w-4 h-4 text-[#2563EB] focus:ring-[#2563EB] focus:ring-2"
+                  />
+                  <div className="flex-1">
+                    <div className="font-medium text-white mb-1">
+                      Upload leads (CSV)
+                    </div>
+                    <div className="text-sm text-white/60">
+                      Use your existing list. You’ll preview it before creating
+                      the campaign.
+                    </div>
                   </div>
-                </>
-              ) : leadSource === "import" ? (
+                </label>
+                <label className="flex items-start gap-4 p-4 rounded-lg border border-white/20 bg-white/5 hover:bg-white/10 cursor-pointer transition-colors">
+                  <input
+                    type="radio"
+                    name="leadSource"
+                    value="create"
+                    checked={leadSource === "create"}
+                    onChange={() => setLeadSource("create")}
+                    className="mt-1 w-4 h-4 text-[#2563EB] focus:ring-[#2563EB] focus:ring-2"
+                  />
+                  <div className="flex-1">
+                    <div className="font-medium text-white mb-1">
+                      Generate leads (Apollo)
+                    </div>
+                    <div className="text-sm text-white/60">
+                      We’ll fetch leads by location, job titles, and company
+                      size. Then you preview and can download before creating.
+                    </div>
+                  </div>
+                </label>
+              </div>
+              <div className="flex gap-4">
+                <Button
+                  variant="secondary"
+                  size="md"
+                  onClick={() => setStep(0)}
+                  className="flex-1"
+                >
+                  Back
+                </Button>
+                <Button
+                  variant="primary"
+                  size="md"
+                  onClick={() => setStep(2)}
+                  disabled={leadSource === null}
+                  className="flex-1"
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 2: Upload CSV (import) OR Generate leads (create) */}
+          {step === 2 && (
+            <div>
+              {leadSource === "import" ? (
                 <>
                   <div className="mb-6">
                     <button
-                      onClick={() => setLeadSource(null)}
+                      onClick={() => setStep(1)}
                       className="text-sm text-white/60 hover:text-white mb-4 inline-flex items-center gap-1"
                     >
-                      ← Back to options
+                      ← Back
                     </button>
-                    <h2 className="text-xl font-semibold text-white mb-4">
+                    <h2 className="text-xl font-semibold text-white mb-2">
                       Upload CSV Leads
                     </h2>
+                    <p className="text-white/60 text-sm">
+                      Next you’ll preview how it looks, then create the
+                      campaign.
+                    </p>
                   </div>
                   <div className="rounded-lg border border-white/10 bg-white/5 p-4 mb-6">
                     <p className="text-sm font-medium text-white/90 mb-2">
@@ -859,12 +1135,15 @@ export default function CreateCampaignPage() {
                     </p>
                     <ul className="text-xs text-white/70 space-y-1">
                       <li>
-                        <strong className="text-white/90">Required:</strong>{" "}
-                        email
+                        <strong className="text-white/90">
+                          Required (3 minimum):
+                        </strong>{" "}
+                        name (first_name, last_name, or full_name), email,
+                        orgName (or organizationName)
                       </li>
                       <li>
                         <strong className="text-white/90">Recommended:</strong>{" "}
-                        first_name, company, title, linkedin_url
+                        title/position, linkedin_url, org_description
                       </li>
                     </ul>
                   </div>
@@ -912,38 +1191,65 @@ export default function CreateCampaignPage() {
                           Detected columns: {detectedCsvColumns.join(", ")}
                         </p>
                       )}
+                      {csvValidationError && (
+                        <p className="mt-2 text-sm text-red-400" role="alert">
+                          {csvValidationError}
+                        </p>
+                      )}
                     </div>
-                    <Button
-                      variant="primary"
-                      size="md"
-                      onClick={() => setStep(3)}
-                      disabled={!formData.csvFile}
-                      className="w-full"
-                    >
-                      Next: Review &amp; Approve Leads
-                    </Button>
+                    <div className="flex gap-4">
+                      <Button
+                        variant="secondary"
+                        size="md"
+                        onClick={() => setStep(1)}
+                        className="flex-1"
+                      >
+                        Back
+                      </Button>
+                      <Button
+                        variant="primary"
+                        size="md"
+                        onClick={() => {
+                          if (!formData.csvFile) return;
+                          const { valid, missing } =
+                            validateCsvColumns(detectedCsvColumns);
+                          if (!valid) {
+                            setCsvValidationError(
+                              `Missing required columns: ${missing.join(", ")}. Please add these columns to your CSV.`,
+                            );
+                            return;
+                          }
+                          setCsvValidationError(null);
+                          setStep(3);
+                        }}
+                        disabled={!formData.csvFile}
+                        className="flex-1"
+                      >
+                        Next: Preview
+                      </Button>
+                    </div>
                   </div>
                 </>
               ) : (
                 <>
                   <div className="mb-6">
                     <button
-                      onClick={() => setLeadSource(null)}
+                      onClick={() => setStep(1)}
                       className="text-sm text-white/60 hover:text-white mb-4 inline-flex items-center gap-1"
                     >
-                      ← Back to options
+                      ← Back
                     </button>
-                    <h2 className="text-xl font-semibold text-white mb-4">
-                      Create Leads from Scratch
+                    <h2 className="text-xl font-semibold text-white mb-2">
+                      Generate leads
                     </h2>
                     <p className="text-white/60 text-sm mb-6">
-                      Tell us about your ideal customers and we'll generate a
-                      targeted list for you
+                      Set your criteria. We’ll fetch leads, then you can preview
+                      and download before creating the campaign.
                     </p>
                   </div>
                   <div className="space-y-6">
                     <MultiSelectWithTags
-                      label="Which target location (geography)? Select at least 1 country"
+                      label="Target location (at least 1 country)"
                       options={COUNTRIES}
                       value={formData.targetLocations}
                       onChange={(targetLocations) =>
@@ -951,9 +1257,8 @@ export default function CreateCampaignPage() {
                       }
                       placeholder="Select country or region(s)"
                     />
-
                     <MultiSelectWithTags
-                      label="Job Titles to include? (must select 1)"
+                      label="Job titles (at least 1)"
                       options={JOB_TITLES}
                       value={formData.jobTitles}
                       onChange={(jobTitles) =>
@@ -961,9 +1266,8 @@ export default function CreateCampaignPage() {
                       }
                       placeholder="Select job title(s)"
                     />
-
                     <MultiSelectWithTags
-                      label="Number of Employees (select at least one)"
+                      label="Company size (at least one)"
                       options={EMPLOYEE_RANGES}
                       value={formData.employeeRanges}
                       onChange={(employeeRanges) =>
@@ -971,7 +1275,6 @@ export default function CreateCampaignPage() {
                       }
                       placeholder="Select employee range(s)"
                     />
-
                     <MultiSelectWithTags
                       label="Industry (at least 1) — technology & software"
                       options={INDUSTRY_OPTIONS}
@@ -981,14 +1284,12 @@ export default function CreateCampaignPage() {
                       }
                       placeholder="Select industry / industries"
                     />
-
-                    {/* Max Leads to Fetch */}
                     <div>
                       <Label
                         htmlFor="maxLeads"
                         className="text-white/90 mb-2 block"
                       >
-                        Max Leads to Fetch
+                        Max leads to fetch
                       </Label>
                       <Input
                         id="maxLeads"
@@ -1011,560 +1312,245 @@ export default function CreateCampaignPage() {
                         className="w-full"
                       />
                       <p className="mt-1 text-xs text-white/60">
-                        Controls scraping cost and time. Min {MAX_LEADS_MIN},
-                        max {MAX_LEADS_MAX}.
+                        Min {MAX_LEADS_MIN}, max {MAX_LEADS_MAX}.
                       </p>
                     </div>
-
                     {fetchLeadsError && (
                       <p className="text-sm text-red-400" role="alert">
                         {fetchLeadsError}
                       </p>
                     )}
-
-                    <Button
-                      variant="primary"
-                      size="md"
-                      onClick={handleFetchLeads}
-                      disabled={!canFetchLeads() || fetchLeadsLoading}
-                      className="w-full"
-                    >
-                      {fetchLeadsLoading
-                        ? "Please wait as we generate leads…"
-                        : "Fetch Leads"}
-                    </Button>
-                    <p className="text-center text-xs text-white/50">
-                      Next: we verify and clean emails before you can launch.
-                    </p>
+                    <div className="flex gap-4">
+                      <Button
+                        variant="secondary"
+                        size="md"
+                        onClick={() => setStep(1)}
+                        className="flex-1"
+                      >
+                        Back
+                      </Button>
+                      <Button
+                        variant="primary"
+                        size="md"
+                        onClick={handleGoToPreview}
+                        disabled={!canFetchLeads()}
+                        className="flex-1"
+                      >
+                        Next: Preview
+                      </Button>
+                    </div>
                   </div>
                 </>
               )}
             </div>
           )}
 
-          {/* Step 3: Review & Approve Leads */}
+          {/* Step 3: Preview (CSV or generated leads) */}
           {step === 3 && (
             <div>
-              {leadSource === "create" &&
-              fetchLeadsResult &&
-              !acknowledgedLeadsRequest ? (
-                <div className="rounded-lg border border-white/10 bg-white/5 p-6 mb-6">
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center">
-                      <span className="text-emerald-400 text-lg">✓</span>
-                    </div>
-                    <h2 className="text-xl font-semibold text-white">
-                      {fetchLeadsResult.message}
-                    </h2>
-                  </div>
-                  <p className="text-white/80 text-sm mb-4">
-                    Please proceed to the next step to review and approve the
-                    leads.
-                  </p>
-                  <div className="rounded bg-white/5 border border-white/10 p-3 mb-6 font-mono text-sm text-white/90 break-all">
-                    <span className="text-white/50">Campaign ID: </span>
-                    {fetchLeadsResult.campaign_id}
-                  </div>
-                  <Button
-                    onClick={() => {
-                      setAcknowledgedLeadsRequest(true);
-                      setLeadsApproved(true);
-                      setStep(4);
-                    }}
-                    className="w-full sm:w-auto"
-                  >
-                    Continue
-                  </Button>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-4">
-                  <p className="text-white/70 text-sm">
-                    Continue to the next step to set up your campaign.
-                  </p>
-                  <Button
-                    onClick={() => {
-                      setLeadsApproved(true);
-                      setStep(4);
-                    }}
-                    className="w-full sm:w-auto"
-                  >
-                    Continue
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setStep(2)}
-                    className="w-full sm:w-auto"
-                  >
-                    ← Back
-                  </Button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {step === 4 && (
-            <div>
-              <h2 className="text-xl font-semibold text-white mb-2">
-                Describe ICP
-              </h2>
-              <p className="text-white/60 text-sm mb-4">
-                Describe who you&apos;re targeting. This helps tailor messaging
-                and lead filtering.
-              </p>
-              <div className="space-y-4">
-                <div>
-                  <div className="flex items-center justify-between gap-2 mb-2">
-                    <Label htmlFor="icp" className="text-white/90">
-                      Ideal Customer Profile
-                    </Label>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() =>
-                        setFormData({ ...formData, icp: ICP_TEMPLATE })
-                      }
-                    >
-                      Use Template
-                    </Button>
-                  </div>
-                  <textarea
-                    id="icp"
-                    value={formData.icp}
-                    onChange={(e) =>
-                      setFormData({ ...formData, icp: e.target.value })
-                    }
-                    placeholder={ICP_TEMPLATE}
-                    className="w-full rounded-lg border border-white/20 bg-white/5 px-3 py-2 text-sm text-white placeholder-white/40 focus:border-[#2563EB] focus:outline-none focus:ring-1 focus:ring-[#2563EB] min-h-[140px]"
-                  />
-                </div>
-                <div className="flex gap-4">
-                  <Button
-                    variant="secondary"
-                    size="md"
-                    onClick={() => setStep(3)}
-                    className="flex-1"
-                  >
-                    Back
-                  </Button>
-                  <Button
-                    variant="primary"
-                    size="md"
-                    onClick={() => setStep(5)}
-                    disabled={!formData.icp.trim()}
-                    className="flex-1"
-                  >
-                    Next: Describe Offer
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {step === 5 && (
-            <div>
-              <h2 className="text-xl font-semibold text-white mb-2">
-                Describe Offer
-              </h2>
-              <p className="text-white/60 text-sm mb-4">
-                Describe the outcome you deliver, proof, and the call-to-action.
-              </p>
-              <div className="space-y-4">
-                <div>
-                  <div className="flex items-center justify-between gap-2 mb-2">
-                    <Label htmlFor="offer" className="text-white/90">
-                      Your Offer
-                    </Label>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() =>
-                        setFormData({ ...formData, offer: OFFER_TEMPLATE })
-                      }
-                    >
-                      Use Template
-                    </Button>
-                  </div>
-                  <textarea
-                    id="offer"
-                    value={formData.offer}
-                    onChange={(e) =>
-                      setFormData({ ...formData, offer: e.target.value })
-                    }
-                    placeholder={OFFER_TEMPLATE}
-                    className="w-full rounded-lg border border-white/20 bg-white/5 px-3 py-2 text-sm text-white placeholder-white/40 focus:border-[#2563EB] focus:outline-none focus:ring-1 focus:ring-[#2563EB] min-h-[140px]"
-                  />
-                </div>
-                <div className="flex gap-4">
-                  <Button
-                    variant="secondary"
-                    size="md"
-                    onClick={() => setStep(4)}
-                    className="flex-1"
-                  >
-                    Back
-                  </Button>
-                  <Button
-                    variant="primary"
-                    size="md"
-                    onClick={() => setStep(6)}
-                    disabled={!formData.offer.trim()}
-                    className="flex-1"
-                  >
-                    Next: Edit Emails
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {step === 6 && (
-            <div>
-              <h2 className="text-xl font-semibold text-white mb-4">
-                Edit 3-4 Emails
-              </h2>
-              <div className="mb-4">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => setAiEmailModalOpen(true)}
+              <div className="mb-6">
+                <button
+                  onClick={() => setStep(2)}
+                  className="text-sm text-white/60 hover:text-white mb-4 inline-flex items-center gap-1"
                 >
-                  Use AI to generate emails
-                </Button>
-              </div>
-              {aiEmailModalOpen && (
-                <div
-                  className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-                  onClick={() => setAiEmailModalOpen(false)}
-                >
-                  <div
-                    className="rounded-xl border border-white/10 bg-[#111827] p-6 w-full max-w-md shadow-xl"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <h3 className="text-lg font-semibold text-white mb-4">
-                      Generate 4-email sequence
-                    </h3>
-                    <div className="space-y-4">
-                      <div>
-                        <Label className="text-white/80 text-sm">Tone</Label>
-                        <select
-                          value={aiTone}
-                          onChange={(e) =>
-                            setAiTone(e.target.value as typeof aiTone)
-                          }
-                          className="mt-1 w-full rounded-lg border border-white/20 bg-white/5 px-3 py-2 text-sm text-white"
-                        >
-                          <option value="Professional">Professional</option>
-                          <option value="Friendly">Friendly</option>
-                          <option value="Direct">Direct</option>
-                        </select>
-                      </div>
-                      <div>
-                        <Label className="text-white/80 text-sm">Length</Label>
-                        <select
-                          value={aiLength}
-                          onChange={(e) =>
-                            setAiLength(e.target.value as typeof aiLength)
-                          }
-                          className="mt-1 w-full rounded-lg border border-white/20 bg-white/5 px-3 py-2 text-sm text-white"
-                        >
-                          <option value="Short">Short</option>
-                          <option value="Medium">Medium</option>
-                        </select>
-                      </div>
-                      <div>
-                        <Label className="text-white/80 text-sm">
-                          CTA style
-                        </Label>
-                        <select
-                          value={aiCtaStyle}
-                          onChange={(e) =>
-                            setAiCtaStyle(e.target.value as typeof aiCtaStyle)
-                          }
-                          className="mt-1 w-full rounded-lg border border-white/20 bg-white/5 px-3 py-2 text-sm text-white"
-                        >
-                          <option value="Soft ask">Soft ask</option>
-                          <option value="Direct calendar">
-                            Direct calendar
-                          </option>
-                        </select>
-                      </div>
-                    </div>
-                    <div className="mt-6 flex gap-3">
-                      <Button
-                        variant="secondary"
-                        size="md"
-                        onClick={() => setAiEmailModalOpen(false)}
-                        className="flex-1"
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        variant="primary"
-                        size="md"
-                        onClick={handleGenerateAiEmails}
-                        className="flex-1"
-                      >
-                        Generate 4-email sequence
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              )}
-              <div className="space-y-6">
-                {formData.emails.map((email, index) => (
-                  <div key={index}>
-                    <Label className="text-white/90 mb-2 block">
-                      Email {index + 1}
-                    </Label>
-                    <textarea
-                      value={email}
-                      onChange={(e) => handleEmailChange(index, e.target.value)}
-                      placeholder={EMAIL_PLACEHOLDERS[index]}
-                      className="w-full rounded-lg border border-white/20 bg-white/5 px-3 py-2 text-sm text-white placeholder-white/40 focus:border-[#2563EB] focus:outline-none focus:ring-1 focus:ring-[#2563EB] min-h-[100px]"
-                    />
-                  </div>
-                ))}
-                <div className="flex gap-4">
-                  <Button
-                    variant="secondary"
-                    size="md"
-                    onClick={() => setStep(5)}
-                    className="flex-1"
-                  >
-                    Back
-                  </Button>
-                  <Button
-                    variant="primary"
-                    size="md"
-                    onClick={() => setStep(7)}
-                    disabled={
-                      formData.emails.filter((e) => e.trim()).length < 3
-                    }
-                    className="flex-1"
-                  >
-                    Next: Launch
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {step === 7 && (
-            <div>
-              <h2 className="text-xl font-semibold text-white mb-4">
-                Launch Campaign
-              </h2>
-              <div className="rounded-lg border border-white/10 bg-white/5 p-4 space-y-2 mb-6">
-                {leadSource === "import" ? (
-                  <div className="text-sm text-white/70">
-                    <strong className="text-white">CSV:</strong>{" "}
-                    {formData.csvFile?.name || "Not uploaded"}
-                  </div>
-                ) : (
-                  <div className="text-sm text-white/70">
-                    <strong className="text-white">Lead Source:</strong> Apollo
-                    (from scratch)
-                    <br />
-                    <strong className="text-white">Locations:</strong>{" "}
-                    {formData.targetLocations.join(", ")}
-                    <br />
-                    <strong className="text-white">Job Titles:</strong>{" "}
-                    {formData.jobTitles.join(", ")}
-                    <br />
-                    <strong className="text-white">Employees:</strong>{" "}
-                    {formData.employeeRanges.join(", ")}
-                    <br />
-                    <strong className="text-white">Industries:</strong>{" "}
-                    {formData.industryKeywords.join(", ")}
-                  </div>
-                )}
-                <div className="text-sm text-white/70">
-                  <strong className="text-white">ICP:</strong>{" "}
-                  {formData.icp.substring(0, 50)}…
-                </div>
-                <div className="text-sm text-white/70">
-                  <strong className="text-white">Offer:</strong>{" "}
-                  {formData.offer.substring(0, 50)}…
-                </div>
-                <div className="text-sm text-white/70">
-                  <strong className="text-white">Emails:</strong>{" "}
-                  {formData.emails.filter((e) => e.trim()).length} configured
-                </div>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-white/5 p-4 space-y-3 mb-6">
-                <p className="text-sm font-medium text-white/90 mb-2">
-                  Checklist
+                  ← Back
+                </button>
+                <h2 className="text-xl font-semibold text-white mb-2">
+                  {leadSource === "import"
+                    ? "Preview your CSV"
+                    : "Preview leads"}
+                </h2>
+                <p className="text-white/60 text-sm">
+                  {leadSource === "import"
+                    ? "Check how your upload looks. You can download a copy, then create the campaign."
+                    : "Review your criteria. Leads will be generated after you create the campaign."}
                 </p>
-                <div className="flex items-center gap-2 text-sm">
-                  <span
-                    className={
-                      leadsApproved ? "text-emerald-400" : "text-white/50"
-                    }
-                  >
-                    {leadsApproved ? "✓" : "○"}
-                  </span>
-                  <span className="text-white/80">Leads approved</span>
-                </div>
-                <div className="flex items-center gap-2 text-sm">
-                  <span
-                    className={
-                      formData.emails.filter((e) => e.trim()).length >= 3
-                        ? "text-emerald-400"
-                        : "text-white/50"
-                    }
-                  >
-                    {formData.emails.filter((e) => e.trim()).length >= 3
-                      ? "✓"
-                      : "○"}
-                  </span>
-                  <span className="text-white/80">Emails configured</span>
-                </div>
-                <div className="flex items-center gap-2 text-sm">
-                  <span
-                    className={
-                      sendingAccountConnected
-                        ? "text-emerald-400"
-                        : "text-white/50"
-                    }
-                  >
-                    {sendingAccountConnected ? "✓" : "○"}
-                  </span>
-                  <span className="text-white/80">
-                    Sending account connected
-                  </span>
-                </div>
-                {fetchLeadsResult?.campaign_id && (
-                  <div className="pt-3 mt-3 border-t border-white/10">
-                    <div className="flex items-center gap-2 text-sm flex-wrap">
-                      <span
-                        className={
-                          campaignDataFetched
-                            ? "text-emerald-400"
-                            : campaignDataLoading
-                              ? "text-amber-400"
-                              : "text-white/50"
-                        }
-                      >
-                        {campaignDataFetched
-                          ? "✓"
-                          : campaignDataLoading
-                            ? "…"
-                            : "○"}
-                      </span>
-                      <span className="text-white/80">
-                        {campaignDataFetched
-                          ? verifiedLeadsCount != null
-                            ? `Leads loaded (${campaignLeads.length} total, ${verifiedLeadsCount} verified)`
-                            : "Leads loaded"
-                          : "Load leads from database"}
-                      </span>
-                      {!campaignDataFetched && !campaignDataLoading && (
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={fetchLeadsFromDb}
-                          className="ml-2"
-                        >
-                          Load leads
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                )}
               </div>
-              {campaignDataFetched &&
-                (campaignLeads.length > 0 || verifiedLeadsCount === 0) && (
+
+              {leadSource === "import" ? (
+                <>
                   <div className="rounded-lg border border-white/10 bg-white/5 p-4 mb-6">
-                    <p className="text-sm font-medium text-white/90 mb-3">
-                      Leads ({campaignLeads.length} total, {verifiedLeadsCount ?? 0} verified)
+                    <p className="text-sm font-medium text-white/90 mb-2">
+                      {formData.csvFile?.name ?? "CSV"} —{" "}
+                      {csvPreviewRows.length} rows (preview)
                     </p>
-                    <div className="flex flex-wrap gap-2 mb-3">
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => setLeadsPreviewOpen((prev) => !prev)}
-                      >
-                        {leadsPreviewOpen ? "Hide preview" : "Preview"}
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={downloadLeadsCsv}
-                        disabled={campaignLeads.length === 0}
-                      >
-                        Download CSV
-                      </Button>
-                    </div>
-                    {leadsPreviewOpen && campaignLeads.length > 0 && (
+                    {detectedCsvColumns.length > 0 && (
                       <div className="overflow-x-auto rounded border border-white/10 max-h-64 overflow-y-auto">
                         <table className="w-full text-sm text-left">
                           <thead className="bg-white/5 text-white/80 sticky top-0">
                             <tr>
-                              <th className="px-3 py-2">Name</th>
-                              <th className="px-3 py-2">Email</th>
-                              <th className="px-3 py-2">Status</th>
-                              <th className="px-3 py-2">Position</th>
-                              <th className="px-3 py-2">Company</th>
-                              <th className="px-3 py-2">Country</th>
+                              {detectedCsvColumns.map((h, i) => (
+                                <th
+                                  key={i}
+                                  className="px-3 py-2 whitespace-nowrap"
+                                >
+                                  {h}
+                                </th>
+                              ))}
                             </tr>
                           </thead>
                           <tbody className="text-white/90">
-                            {campaignLeads.map((l) => (
-                              <tr
-                                key={l.id}
-                                className="border-t border-white/10"
-                              >
-                                <td className="px-3 py-1.5">
-                                  {l.full_name ?? "—"}
-                                </td>
-                                <td className="px-3 py-1.5">{l.email}</td>
-                                <td className="px-3 py-1.5">
-                                  {l.email_status}
-                                </td>
-                                <td className="px-3 py-1.5">
-                                  {l.position ?? "—"}
-                                </td>
-                                <td className="px-3 py-1.5">
-                                  {l.org_name ?? "—"}
-                                </td>
-                                <td className="px-3 py-1.5">
-                                  {l.country ?? "—"}
-                                </td>
+                            {csvPreviewRows.slice(0, 20).map((row, ri) => (
+                              <tr key={ri} className="border-t border-white/10">
+                                {row.map((cell, ci) => (
+                                  <td
+                                    key={ci}
+                                    className="px-3 py-1.5 whitespace-nowrap max-w-[200px] truncate"
+                                  >
+                                    {cell || "—"}
+                                  </td>
+                                ))}
                               </tr>
                             ))}
                           </tbody>
                         </table>
                       </div>
                     )}
+                    {csvPreviewRows.length > 20 && (
+                      <p className="mt-2 text-xs text-white/50">
+                        Showing first 20 of {csvPreviewRows.length} rows
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex gap-4">
+                    <Button
+                      variant="secondary"
+                      size="md"
+                      onClick={() => setStep(2)}
+                      className="flex-1"
+                    >
+                      Back
+                    </Button>
+                    <Button
+                      variant="primary"
+                      size="md"
+                      onClick={() => setStep(4)}
+                      className="flex-1"
+                    >
+                      Next: Create campaign
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="rounded-lg border border-white/10 bg-white/5 p-4 mb-6">
+                    <p className="text-sm font-medium text-white/90 mb-2">
+                      Your criteria
+                    </p>
+                    <div className="text-sm text-white/70 space-y-1">
+                      <p>
+                        <strong className="text-white/90">Locations:</strong>{" "}
+                        {formData.targetLocations.join(", ") || "—"}
+                      </p>
+                      <p>
+                        <strong className="text-white/90">Job titles:</strong>{" "}
+                        {formData.jobTitles.join(", ") || "—"}
+                      </p>
+                      <p>
+                        <strong className="text-white/90">Company size:</strong>{" "}
+                        {formData.employeeRanges.join(", ") || "—"}
+                      </p>
+                      <p>
+                        <strong className="text-white/90">Industries:</strong>{" "}
+                        {formData.industryKeywords.join(", ") || "—"}
+                      </p>
+                      <p>
+                        <strong className="text-white/90">Max leads:</strong>{" "}
+                        {formData.maxLeadsToFetch}
+                      </p>
+                    </div>
+                    <p className="mt-3 text-sm text-white/60">
+                      Leads will be generated when you click Create campaign.
+                    </p>
+                  </div>
+                  <div className="flex gap-4">
+                    <Button
+                      variant="secondary"
+                      size="md"
+                      onClick={() => setStep(2)}
+                      className="flex-1"
+                    >
+                      Back
+                    </Button>
+                    <Button
+                      variant="primary"
+                      size="md"
+                      onClick={() => setStep(4)}
+                      className="flex-1"
+                    >
+                      Next: Create campaign
+                    </Button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {step === 4 && (
+            <div>
+              <h2 className="text-xl font-semibold text-white mb-4">
+                Create campaign
+              </h2>
+              <div className="rounded-lg border border-white/10 bg-white/5 p-4 space-y-2 mb-6">
+                <div className="text-sm text-white/70">
+                  <strong className="text-white">Campaign:</strong>{" "}
+                  {campaignName || "Unnamed"}
+                </div>
+                {leadSource === "import" ? (
+                  <div className="text-sm text-white/70">
+                    <strong className="text-white">Leads:</strong> CSV —{" "}
+                    {formData.csvFile?.name ?? "File selected"}
+                  </div>
+                ) : (
+                  <div className="text-sm text-white/70">
+                    <strong className="text-white">Leads:</strong> Generated
+                    {formData.targetLocations.length > 0 && (
+                      <> — {formData.targetLocations.join(", ")}</>
+                    )}
                   </div>
                 )}
+              </div>
+              {fetchLeadsError && (
+                <p className="mb-4 text-sm text-red-400" role="alert">
+                  {fetchLeadsError}
+                </p>
+              )}
+              {createCampaignLoading && (
+                <div
+                  className="mb-6 rounded-lg border border-amber-500/40 bg-amber-500/15 px-4 py-3"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <p className="text-sm font-medium text-amber-200">
+                    {leadSource === "create"
+                      ? "This may take 2–5 minutes depending on how many leads we're generating. Please stay on this page — we're creating your campaign and generating your leads."
+                      : "Creating your campaign…"}
+                  </p>
+                </div>
+              )}
               <div className="flex gap-4">
                 <Button
                   variant="secondary"
                   size="md"
-                  onClick={() => setStep(6)}
+                  onClick={() => setStep(3)}
                   className="flex-1"
+                  disabled={createCampaignLoading}
                 >
                   Back
                 </Button>
                 <Button
                   variant="primary"
                   size="md"
-                  onClick={handleSubmit}
-                  disabled={!isLaunchEnabled()}
+                  onClick={() => {
+                    setFetchLeadsError(null);
+                    void handleSubmit();
+                  }}
+                  disabled={createCampaignLoading}
                   className="flex-1"
                 >
-                  Launch Campaign
+                  {createCampaignLoading ? "Please wait…" : "Create campaign"}
                 </Button>
               </div>
-              {!isLaunchEnabled() && (
-                <p className="mt-2 text-sm text-white/50">
-                  {fetchLeadsResult?.campaign_id && !campaignDataFetched
-                    ? "Load leads from database to preview and enable launch."
-                    : "Complete all checklist items to launch."}
-                </p>
-              )}
             </div>
           )}
         </div>

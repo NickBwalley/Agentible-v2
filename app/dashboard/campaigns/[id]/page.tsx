@@ -71,6 +71,7 @@ export default function CampaignDetailPage() {
   const [sendPhase, setSendPhase] = useState<"idle" | "sending" | "success" | "error" | "timeout">("idle");
   const [sendError, setSendError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [campaignAlreadySent, setCampaignAlreadySent] = useState(false);
 
   useEffect(() => {
     async function loadCampaign() {
@@ -112,17 +113,51 @@ export default function CampaignDetailPage() {
       }));
 
       setLeads(rows);
-      const delivered = rows.filter((r) => r.email_status === "valid").length;
+      const totalLeads = rows.length;
+
+      const { data: sendResults } = await supabase
+        .from("campaign_send_results")
+        .select("status")
+        .eq("campaign_id", campaignId);
+
+      const emailsDelivered =
+        (sendResults ?? []).filter((r) => r.status === "sent").length;
+      const inboxPct =
+        totalLeads > 0 && emailsDelivered > 0
+          ? (emailsDelivered / totalLeads) * 100
+          : 0;
+
+      setCampaignAlreadySent((sendResults ?? []).length > 0);
       setMetrics((m) => ({
         ...m,
-        totalLeads: rows.length,
-        emailsDelivered: delivered,
-        inboxPct: rows.length > 0 ? (delivered / rows.length) * 100 : 0,
+        totalLeads,
+        emailsDelivered,
+        inboxPct,
       }));
       setLeadsLoading(false);
     }
     loadLeads();
   }, [campaignId]);
+
+  const refreshSendMetrics = async () => {
+    const supabase = createClient();
+    const { data: sendResults } = await supabase
+      .from("campaign_send_results")
+      .select("status")
+      .eq("campaign_id", campaignId);
+    const emailsDelivered =
+      (sendResults ?? []).filter((r) => r.status === "sent").length;
+    const totalLeads = leads.length;
+    const inboxPct =
+      totalLeads > 0 && emailsDelivered > 0
+        ? (emailsDelivered / totalLeads) * 100
+        : 0;
+    setMetrics((m) => ({
+      ...m,
+      emailsDelivered,
+      inboxPct,
+    }));
+  };
 
   const downloadCsv = () => {
     if (leads.length === 0) return;
@@ -234,6 +269,7 @@ export default function CampaignDetailPage() {
       }
       setSendPhase("success");
       setSuccessMessage(data.message ?? "Successfully sent cold outreach emails. Check your dashboard for real metrics on deliverability.");
+      void refreshSendMetrics();
     } catch (e) {
       clearTimeout(timeoutId);
       const isAbort = e instanceof Error && e.name === "AbortError";
@@ -248,6 +284,20 @@ export default function CampaignDetailPage() {
       setStartCampaignLoading(false);
     }
   };
+
+  const handleResendCampaign = () => {
+    const confirmed = window.confirm(
+      "This will resend this email once again to all leads. Recipients may receive duplicate emails. Are you sure you want to continue?"
+    );
+    if (confirmed) handleConfirmAndStart();
+  };
+
+  const showAlreadySentUI = campaignAlreadySent || sendPhase === "success";
+  const displaySuccessMessage =
+    successMessage ||
+    (campaignAlreadySent
+      ? "Campaign was sent successfully. Emails have been delivered to your leads. Check your dashboard for real metrics on deliverability."
+      : null);
 
   return (
     <div className="min-h-screen bg-[#0f1419] pt-8 pb-20 px-6">
@@ -468,18 +518,18 @@ export default function CampaignDetailPage() {
           <div>
             <h3 className="text-lg font-medium text-white mb-4">3. Confirm and start</h3>
             {sendPhase === "sending" && (
-              <p className="text-white/90 text-sm mb-2">Sending outreach messages......</p>
+              <>
+                <p className="text-white/90 text-sm mb-2">Sending outreach messages......</p>
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 mb-4">
+                  <p className="text-amber-200 text-sm">
+                    Please hold on as we send your cold outreach emails to the recipients (approx 2–3 min). We&apos;ll give you a response as soon as it&apos;s complete.
+                  </p>
+                </div>
+              </>
             )}
-            {sendPhase === "sending" && (
-              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 mb-4">
-                <p className="text-amber-200 text-sm">
-                  Please hold on as we send your cold outreach emails to the recipients (approx 2–3 min). We&apos;ll give you a response as soon as it&apos;s complete.
-                </p>
-              </div>
-            )}
-            {sendPhase === "success" && successMessage && (
+            {showAlreadySentUI && displaySuccessMessage && (
               <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4 mb-4">
-                <p className="text-emerald-200 text-sm">{successMessage}</p>
+                <p className="text-emerald-200 text-sm">{displaySuccessMessage}</p>
               </div>
             )}
             {sendPhase === "error" && sendError && (
@@ -494,14 +544,31 @@ export default function CampaignDetailPage() {
                 </p>
               </div>
             )}
-            <ConfirmAndStartBlock
-              yourName={yourName}
-              onYourNameChange={setYourName}
-              leadCount={leads.length}
-              onConfirmAndStart={handleConfirmAndStart}
-              loading={startCampaignLoading}
-              disabled={leads.length === 0}
-            />
+            {showAlreadySentUI ? (
+              <div className="rounded-lg border border-white/10 bg-white/5 p-4 space-y-4">
+                <Button
+                  variant="primary"
+                  size="md"
+                  onClick={handleResendCampaign}
+                  disabled={startCampaignLoading || leads.length === 0}
+                  className="!bg-[#7c3aed] hover:!bg-[#6d28d9] !shadow-[0_0_15px_rgba(124,58,237,0.35)] hover:!shadow-[0_0_20px_rgba(124,58,237,0.45)]"
+                >
+                  {startCampaignLoading ? "Sending…" : "Resend Campaign"}
+                </Button>
+                <p className="text-white/60 text-sm">
+                  Resend will send this email again to all {leads.length} lead{leads.length !== 1 ? "s" : ""}. Use only if you need to resend (e.g. template fix).
+                </p>
+              </div>
+            ) : (
+              <ConfirmAndStartBlock
+                yourName={yourName}
+                onYourNameChange={setYourName}
+                leadCount={leads.length}
+                onConfirmAndStart={handleConfirmAndStart}
+                loading={startCampaignLoading}
+                disabled={leads.length === 0}
+              />
+            )}
           </div>
         </div>
       </div>

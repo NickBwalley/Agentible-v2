@@ -21,13 +21,16 @@ type WebhookResultItem = {
 
 /** Normalize n8n output: accepted/rejected can be arrays or JSON-stringified arrays. */
 function toEmailArray(v: unknown): string[] {
-  if (Array.isArray(v)) return v.filter((e): e is string => typeof e === "string");
+  if (Array.isArray(v))
+    return v.filter((e): e is string => typeof e === "string");
   if (typeof v === "string") {
     const trimmed = v.trim();
     if (!trimmed) return [];
     try {
       const parsed = JSON.parse(trimmed) as unknown;
-      return Array.isArray(parsed) ? parsed.filter((e): e is string => typeof e === "string") : [];
+      return Array.isArray(parsed)
+        ? parsed.filter((e): e is string => typeof e === "string")
+        : [];
     } catch {
       return [];
     }
@@ -37,11 +40,11 @@ function toEmailArray(v: unknown): string[] {
 
 const SEND_MAIL_WEBHOOK_URL =
   process.env.SEND_MAIL_WEBHOOK_URL ||
-  "https://n8n.srv1036993.hstgr.cloud/webhook-test/agentible-send-mail";
+  "https://n8n.srv1036993.hstgr.cloud/webhook/agentible-send-coldoutreach-emails";
 
 export async function POST(
   request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
     const supabase = await createClient();
@@ -59,17 +62,21 @@ export async function POST(
     if (!campaignId) {
       return NextResponse.json(
         { error: "Missing campaign id" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     const body = (await request.json()) as Body;
-    const { template = "", subject: subjectTemplate = "", yourName = "" } = body;
+    const {
+      template = "",
+      subject: subjectTemplate = "",
+      yourName = "",
+    } = body;
 
     if (!template.trim() || !yourName.trim()) {
       return NextResponse.json(
         { error: "template and yourName are required" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -82,14 +89,14 @@ export async function POST(
     if (campaignError || !campaign) {
       return NextResponse.json(
         { error: "Campaign not found" },
-        { status: 404 }
+        { status: 404 },
       );
     }
 
     if (campaign.user_id !== user.id) {
       return NextResponse.json(
         { error: "You do not have access to this campaign" },
-        { status: 403 }
+        { status: 403 },
       );
     }
 
@@ -101,7 +108,7 @@ export async function POST(
     if (leadsError) {
       return NextResponse.json(
         { error: "Failed to load leads" },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
@@ -109,11 +116,12 @@ export async function POST(
     if (leadList.length === 0) {
       return NextResponse.json(
         { error: "No leads with email addresses in this campaign." },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    const subjectBase = subjectTemplate.trim() || "Quick question – {{firstName}}";
+    const subjectBase =
+      subjectTemplate.trim() || "Quick question – {{firstName}}";
 
     const prospects = leadList.map((lead) => {
       const firstName = getFirstNameFromFullName(lead.full_name);
@@ -139,13 +147,17 @@ export async function POST(
 
     const responseText = (await webhookRes.text()).trim();
     if (!webhookRes.ok) {
-      console.error("n8n webhook error:", webhookRes.status, responseText.slice(0, 500));
+      console.error(
+        "n8n webhook error:",
+        webhookRes.status,
+        responseText.slice(0, 500),
+      );
       return NextResponse.json(
         {
           error:
             "Sending failed. Please try again later and if it persists contact support.",
         },
-        { status: 502 }
+        { status: 502 },
       );
     }
 
@@ -154,33 +166,46 @@ export async function POST(
       items = [];
     } else {
       try {
-        const parsed = JSON.parse(responseText) as WebhookResultItem | WebhookResultItem[];
+        const parsed = JSON.parse(responseText) as
+          | WebhookResultItem
+          | WebhookResultItem[];
         items = Array.isArray(parsed) ? parsed : [parsed];
       } catch (parseErr) {
-        console.error("webhook response not JSON:", responseText.slice(0, 500), parseErr);
+        console.error(
+          "webhook response not JSON:",
+          responseText.slice(0, 500),
+          parseErr,
+        );
         return NextResponse.json(
           {
             error:
               "Sending failed. Please try again later and if it persists contact support.",
           },
-          { status: 502 }
+          { status: 502 },
         );
       }
     }
 
     const acceptedSet = new Set(
-      items.flatMap((i) => toEmailArray(i.accepted).map((e) => e.toLowerCase()))
+      items.flatMap((i) =>
+        toEmailArray(i.accepted).map((e) => e.toLowerCase()),
+      ),
     );
     const rejectedSet = new Set(
-      items.flatMap((i) => toEmailArray(i.rejected).map((e) => e.toLowerCase()))
+      items.flatMap((i) =>
+        toEmailArray(i.rejected).map((e) => e.toLowerCase()),
+      ),
     );
 
     // Detect when n8n didn't return real result data (e.g. Respond to Webhook uses static body)
     const hasResultData =
       items.some(
         (i) =>
-          toEmailArray(i.accepted).length > 0 || toEmailArray(i.rejected).length > 0
-      ) || acceptedSet.size > 0 || rejectedSet.size > 0;
+          toEmailArray(i.accepted).length > 0 ||
+          toEmailArray(i.rejected).length > 0,
+      ) ||
+      acceptedSet.size > 0 ||
+      rejectedSet.size > 0;
 
     const rows = prospects.map((p) => {
       const emailLower = p.email.toLowerCase();
@@ -247,7 +272,7 @@ export async function POST(
         error:
           "Sending failed. Please try again later and if it persists contact support.",
       },
-      { status: isNetworkError ? 503 : 500 }
+      { status: isNetworkError ? 503 : 500 },
     );
   }
 }
