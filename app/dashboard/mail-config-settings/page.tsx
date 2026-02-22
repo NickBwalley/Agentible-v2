@@ -55,7 +55,6 @@ export default function MailConfigSettingsPage() {
   const [smtpSecure, setSmtpSecure] = useState(true);
   const [smtpUser, setSmtpUser] = useState("");
   const [smtpPassword, setSmtpPassword] = useState("");
-  const [fromEmail, setFromEmail] = useState("");
 
   const [imapHost, setImapHost] = useState("");
   const [imapPort, setImapPort] = useState("993");
@@ -78,7 +77,6 @@ export default function MailConfigSettingsPage() {
           );
           setSmtpSecure(data.config.smtp_secure ?? true);
           setSmtpUser(data.config.smtp_user ?? "");
-          setFromEmail(data.config.from_email ?? "");
 
           setImapHost(data.config.imap_host ?? "");
           setImapPort(
@@ -87,7 +85,6 @@ export default function MailConfigSettingsPage() {
           setImapSecure(data.config.imap_secure ?? true);
           setImapUser(data.config.imap_user ?? "");
         }
-        if (!fromEmail && user?.email) setFromEmail((user.email ?? "").trim());
       } catch {
         // ignore
       } finally {
@@ -96,10 +93,6 @@ export default function MailConfigSettingsPage() {
     }
     load();
   }, [user?.email]);
-
-  useEffect(() => {
-    if (config?.from_email && !fromEmail) setFromEmail(config.from_email);
-  }, [config?.from_email]);
 
   const refreshConfig = async () => {
     const res = await fetch("/api/settings/email");
@@ -113,7 +106,6 @@ export default function MailConfigSettingsPage() {
       setSmtpPort(c.smtp_port != null ? String(c.smtp_port) : "587");
       setSmtpSecure(c.smtp_secure ?? true);
       setSmtpUser(c.smtp_user ?? "");
-      setFromEmail(c.from_email ?? "");
       setImapHost(c.imap_host ?? "");
       setImapPort(c.imap_port != null ? String(c.imap_port) : "993");
       setImapSecure(c.imap_secure ?? true);
@@ -135,7 +127,7 @@ export default function MailConfigSettingsPage() {
           smtp_secure: smtpSecure,
           smtp_user: smtpUser.trim(),
           smtp_password: smtpPassword || undefined,
-          from_email: fromEmail.trim(),
+          from_email: smtpUser.trim(),
         }),
       });
       const data = await res.json();
@@ -194,7 +186,6 @@ export default function MailConfigSettingsPage() {
   const canSaveSmtp =
     smtpHost.trim() &&
     smtpUser.trim() &&
-    fromEmail.trim() &&
     (smtpPassword || hasSmtp);
   const canSaveImap =
     imapHost.trim() &&
@@ -342,13 +333,17 @@ export default function MailConfigSettingsPage() {
                   <Input
                     id="from_email"
                     type="email"
-                    value={fromEmail}
-                    onChange={(e) => setFromEmail(e.target.value)}
+                    value={smtpUser}
+                    readOnly
                     placeholder={
                       signInEmail || "e.g. you@yourdomain.com"
                     }
-                    className="bg-white/5 border-white/20 text-white"
+                    className="bg-white/5 border-white/20 text-white read-only:cursor-default read-only:opacity-90"
+                    aria-label="From email (same as SMTP user)"
                   />
+                  <p className="mt-1 text-xs text-white/50">
+                    Same as SMTP user (read-only).
+                  </p>
                 </div>
 
                 {smtpMessage && (

@@ -66,6 +66,7 @@ export async function GET() {
       .maybeSingle();
 
     if (error) {
+      console.error("GET /api/settings/email user_email_config error:", error.message, error.details);
       return NextResponse.json(
         { error: "Failed to load config" },
         { status: 500 }
