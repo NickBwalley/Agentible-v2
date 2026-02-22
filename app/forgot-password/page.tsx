@@ -1,6 +1,8 @@
 import { Header } from "@/components/landing/Header";
 import Link from "next/link";
 
+export const dynamic = "force-dynamic";
+
 export default function ForgotPasswordPage() {
   return (
     <main className="min-h-screen bg-[#0f1419]">
