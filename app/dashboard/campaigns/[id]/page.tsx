@@ -36,6 +36,17 @@ type LeadRow = {
   created_at: string;
 };
 
+type OutreachMessageRow = {
+  id: string;
+  lead_id: string;
+  direction: "outbound" | "inbound";
+  subject: string;
+  body_plain: string;
+  sent_at: string | null;
+  received_at: string | null;
+  created_at: string;
+};
+
 const DEFAULT_SUBJECT = "Quick question – {{firstName}}";
 
 const DEFAULT_EMAIL_TEMPLATE = `Hi {{firstName}},
@@ -87,6 +98,13 @@ export default function CampaignDetailPage() {
     null,
   );
   const [outreachLoadDone, setOutreachLoadDone] = useState(false);
+  const [outreachMessages, setOutreachMessages] = useState<OutreachMessageRow[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [selectedMessage, setSelectedMessage] = useState<{
+    msg: OutreachMessageRow;
+    leadName: string;
+    leadEmail: string;
+  } | null>(null);
 
   useEffect(() => {
     async function loadCampaign() {
@@ -145,11 +163,32 @@ export default function CampaignDetailPage() {
           : 0;
 
       setCampaignAlreadySent((sendResults ?? []).length > 0);
+
+      const { data: messagesData } = await supabase
+        .from("outreach_messages")
+        .select("id, lead_id, direction, subject, body_plain, sent_at, received_at, created_at")
+        .eq("campaign_id", campaignId)
+        .order("created_at", { ascending: true });
+
+      const messages: OutreachMessageRow[] = (messagesData ?? []).map((row) => ({
+        id: row.id,
+        lead_id: row.lead_id,
+        direction: row.direction as "outbound" | "inbound",
+        subject: row.subject ?? "",
+        body_plain: row.body_plain ?? "",
+        sent_at: row.sent_at ?? null,
+        received_at: row.received_at ?? null,
+        created_at: row.created_at ?? "",
+      }));
+      setOutreachMessages(messages);
+      const repliesCount = messages.filter((m) => m.direction === "inbound").length;
+
       setMetrics((m) => ({
         ...m,
         totalLeads,
         emailsDelivered,
         inboxPct,
+        replies: repliesCount,
       }));
       setLeadsLoading(false);
     }
@@ -170,10 +209,30 @@ export default function CampaignDetailPage() {
       totalLeads > 0 && emailsDelivered > 0
         ? (emailsDelivered / totalLeads) * 100
         : 0;
+
+    const { data: messagesData } = await supabase
+      .from("outreach_messages")
+      .select("id, lead_id, direction, subject, body_plain, sent_at, received_at, created_at")
+      .eq("campaign_id", campaignId)
+      .order("created_at", { ascending: true });
+    const messages: OutreachMessageRow[] = (messagesData ?? []).map((row) => ({
+      id: row.id,
+      lead_id: row.lead_id,
+      direction: row.direction as "outbound" | "inbound",
+      subject: row.subject ?? "",
+      body_plain: row.body_plain ?? "",
+      sent_at: row.sent_at ?? null,
+      received_at: row.received_at ?? null,
+      created_at: row.created_at ?? "",
+    }));
+    setOutreachMessages(messages);
+    const repliesCount = messages.filter((m) => m.direction === "inbound").length;
+
     setMetrics((m) => ({
       ...m,
       emailsDelivered,
       inboxPct,
+      replies: repliesCount,
     }));
   };
 
@@ -495,7 +554,188 @@ export default function CampaignDetailPage() {
           </div>
         </div>
 
-        {/* Section 2 - Leads preview + Download / Preview */}
+        {/* Section 2 - Emails Delivered & Replies (from database) */}
+        <div className="mb-12">
+          <h2 className="text-xl font-semibold text-white mb-4">
+            Emails & replies
+          </h2>
+          <p className="text-white/60 text-sm mb-4">
+            Click a row to open the full message. Data is loaded from the
+            database (outbound = sent by you; inbound = reply from lead).
+          </p>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Emails Delivered (outbound) */}
+            <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+              <h3 className="text-lg font-medium text-white mb-3">
+                Emails delivered ({outreachMessages.filter((m) => m.direction === "outbound").length})
+              </h3>
+              {leadsLoading ? (
+                <p className="text-white/50 text-sm">Loading…</p>
+              ) : outreachMessages.filter((m) => m.direction === "outbound").length === 0 ? (
+                <p className="text-white/50 text-sm">
+                  No sent emails yet. Send the campaign to see them here.
+                </p>
+              ) : (
+                <ul className="space-y-2 max-h-64 overflow-y-auto">
+                  {outreachMessages
+                    .filter((m) => m.direction === "outbound")
+                    .map((msg) => {
+                      const lead = leads.find((l) => l.id === msg.lead_id);
+                      return (
+                        <li key={msg.id}>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setSelectedMessage({
+                                msg,
+                                leadName: lead?.full_name ?? "—",
+                                leadEmail: lead?.email ?? "—",
+                              })
+                            }
+                            className="w-full text-left rounded-md border border-white/10 bg-white/5 px-3 py-2.5 hover:bg-white/10 transition-colors"
+                          >
+                            <div className="font-medium text-white truncate">
+                              {lead?.full_name ?? lead?.email ?? msg.lead_id}
+                            </div>
+                            <div className="text-sm text-white/70 truncate">
+                              {msg.subject || "(No subject)"}
+                            </div>
+                            <div className="text-xs text-white/50 mt-0.5">
+                              {msg.sent_at
+                                ? new Date(msg.sent_at).toLocaleString()
+                                : new Date(msg.created_at).toLocaleString()}
+                            </div>
+                          </button>
+                        </li>
+                      );
+                    })}
+                </ul>
+              )}
+            </div>
+
+            {/* Replies (inbound) */}
+            <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+              <h3 className="text-lg font-medium text-white mb-3">
+                Replies ({outreachMessages.filter((m) => m.direction === "inbound").length})
+              </h3>
+              {leadsLoading ? (
+                <p className="text-white/50 text-sm">Loading…</p>
+              ) : outreachMessages.filter((m) => m.direction === "inbound").length === 0 ? (
+                <p className="text-white/50 text-sm">
+                  No replies yet. Configure IMAP in Mail Config to sync replies.
+                </p>
+              ) : (
+                <ul className="space-y-2 max-h-64 overflow-y-auto">
+                  {outreachMessages
+                    .filter((m) => m.direction === "inbound")
+                    .map((msg) => {
+                      const lead = leads.find((l) => l.id === msg.lead_id);
+                      return (
+                        <li key={msg.id}>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setSelectedMessage({
+                                msg,
+                                leadName: lead?.full_name ?? "—",
+                                leadEmail: lead?.email ?? "—",
+                              })
+                            }
+                            className="w-full text-left rounded-md border border-emerald-500/20 bg-emerald-500/5 px-3 py-2.5 hover:bg-emerald-500/10 transition-colors"
+                          >
+                            <div className="font-medium text-white truncate">
+                              {lead?.full_name ?? lead?.email ?? msg.lead_id}
+                            </div>
+                            <div className="text-sm text-white/70 truncate">
+                              {msg.subject || "(No subject)"}
+                            </div>
+                            <div className="text-xs text-white/50 mt-0.5">
+                              {msg.received_at
+                                ? new Date(msg.received_at).toLocaleString()
+                                : new Date(msg.created_at).toLocaleString()}
+                            </div>
+                          </button>
+                        </li>
+                      );
+                    })}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Message detail modal */}
+        {selectedMessage && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70"
+            onClick={() => setSelectedMessage(null)}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Message content"
+          >
+            <div
+              className="rounded-xl border border-white/20 bg-[#0f1419] shadow-xl max-w-2xl w-full max-h-[85vh] overflow-hidden flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="p-4 border-b border-white/10 flex items-center justify-between">
+                <span
+                  className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                    selectedMessage.msg.direction === "outbound"
+                      ? "bg-blue-500/20 text-blue-200"
+                      : "bg-emerald-500/20 text-emerald-200"
+                  }`}
+                >
+                  {selectedMessage.msg.direction === "outbound"
+                    ? "Sent"
+                    : "Reply"}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedMessage(null)}
+                  className="text-white/70 hover:text-white p-1"
+                  aria-label="Close"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="p-4 space-y-3 overflow-y-auto flex-1">
+                <div>
+                  <span className="text-white/50 text-xs">To / From</span>
+                  <p className="text-white font-medium">
+                    {selectedMessage.leadName} ({selectedMessage.leadEmail})
+                  </p>
+                </div>
+                <div>
+                  <span className="text-white/50 text-xs">Subject</span>
+                  <p className="text-white">
+                    {selectedMessage.msg.subject || "(No subject)"}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-white/50 text-xs">Date</span>
+                  <p className="text-white/80 text-sm">
+                    {selectedMessage.msg.direction === "outbound"
+                      ? selectedMessage.msg.sent_at
+                        ? new Date(selectedMessage.msg.sent_at).toLocaleString()
+                        : new Date(selectedMessage.msg.created_at).toLocaleString()
+                      : selectedMessage.msg.received_at
+                        ? new Date(selectedMessage.msg.received_at).toLocaleString()
+                        : new Date(selectedMessage.msg.created_at).toLocaleString()}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-white/50 text-xs">Message</span>
+                  <pre className="mt-1 p-3 rounded-lg bg-white/5 border border-white/10 text-white/90 text-sm whitespace-pre-wrap font-sans overflow-x-auto">
+                    {selectedMessage.msg.body_plain || "(No body)"}
+                  </pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Section 3 - Leads preview + Download / Preview */}
         <div className="mb-12">
           <h2 className="text-xl font-semibold text-white mb-4">Leads</h2>
           <div className="flex flex-wrap gap-3 mb-4">
